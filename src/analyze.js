@@ -15,6 +15,8 @@ import { buildBrief } from './brief.js';
 import { aiFilterNews } from './newsai.js';
 import { checkDataQuality } from './dataquality.js';
 import { accountCapital, portfolioHeat } from './sizing.js';
+import { expectationFor } from './expectancy.js';
+import { recordNewsEvents } from './newsevents.js';
 
 const RULE_DIRECTION = { BUY: 1, ACCUMULATE: 1, HOLD: 0, AVOID: -1, SELL: -1 };
 
@@ -483,6 +485,8 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
   const newsFilter = isIndex ? null : await aiFilterNews(rawNews, { symbol, companyName: info?.name }).catch(() => null);
   if (newsFilter) rawNews = newsFilter.items;
   const newsItems = attachPriceReaction(rawNews, bars);
+  // Tích lũy tin để đo tác động của tin lên giá (newsevents.js); không chặn phân tích
+  if (!isIndex) recordNewsEvents(symbol, newsItems).catch(() => {});
   // Dữ liệu có chuẩn không (giá cập nhật, nến tạm, nhảy giá bất thường, số liệu cơ bản cũ)
   const dataQuality = isIndex ? null : checkDataQuality(bars, {
     indexDate: indexRes?.bars?.at(-1)?.time, exchange: info?.exchange || 'HOSE', fundReportDate: fund?.reportDate || null,
@@ -490,6 +494,8 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
 
   const tech = technicalAnalysis(bars, isIndex ? null : market, { indexBars: indexRes?.bars, foreign });
   const ranking = isIndex ? null : await rankSymbol(symbol, bars).catch(() => null);
+  // Kỳ vọng thống kê của nhóm điểm này (4 năm, rổ theo thời điểm): con số "% tăng" có căn cứ
+  const expectation = ranking ? await expectationFor(ranking.score, ranking.aboveMa200).catch(() => null) : null;
   // Phe mua / phe bán 10 phiên gần nhất (khối lượng, khối ngoại, tự doanh, mua/bán chủ động)
   const orderFlow = isIndex ? null : await getOrderFlow(symbol, bars, foreign).catch(() => null);
   // Dải dao động thống kê 5/10/20 phiên tới (lịch sử ~3 năm) để AI neo dự báo kịch bản
@@ -633,6 +639,7 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
     } : null,
     warnings,
     ranking,
+    expectation,
     stockRisk,
     monteCarlo,
     trend: ranking?.trend ?? (isIndex ? null : trendFeatures(bars)),
@@ -664,9 +671,10 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
     const plan = L ? { buyFrom: L.buyFrom, buyTo: L.buyTo, stop: L.stop, target: L.target, weight: L.weight } : undefined;
     const band = cone?.length ? Object.fromEntries(cone.map((c) => [c.h, [c.p05, c.p95]])) : undefined;
     const base = { symbol, date: lastBar.time, price: lastBar.close, partial: lastBar.partial };
+    const expectedExcess = expectation ? { 5: expectation.h5?.meanExcess ?? null, 20: expectation.h20.meanExcess } : undefined;
     const list = [
-      { ...base, source: 'rule', direction: RULE_DIRECTION[rec.code], label: rec.label, detail: ranking ? `Xếp hạng ${ranking.score}` : `Điểm ${total}`, score: ranking?.score ?? total, band, plan },
-      ranking && { ...base, source: 'rank', direction: ranking.direction, label: ranking.label, detail: `Điểm xếp hạng ${ranking.score}`, score: ranking.score },
+      { ...base, source: 'rule', direction: RULE_DIRECTION[rec.code], label: rec.label, detail: ranking ? `Xếp hạng ${ranking.score}` : `Điểm ${total}`, score: ranking?.score ?? total, band, plan: plan && { ...plan, horizonDays: 20 }, expectedExcess },
+      ranking && { ...base, source: 'rank', direction: ranking.direction, label: ranking.label, detail: `Điểm xếp hạng ${ranking.score}`, score: ranking.score, expectedExcess },
     ];
     if (result.trendPick) {
       list.push({ ...base, source: 'trend_pick', direction: 1, label: 'Trend Pick 8y (gần đỉnh 52w, biến động thấp)', detail: `Vol rank: ${ranking?.vol60PctRank ?? '–'}`, score: ranking?.vol60PctRank });

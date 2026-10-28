@@ -96,7 +96,10 @@ export async function runAi(symbol, { force = false, analysis = null } = {}) {
     const dir = { BUY: 1, ACCUMULATE: 1, HOLD: 0, AVOID: -1, SELL: -1 }[result.final.code];
     recordPrediction({ source: 'final', symbol: a.symbol, date: a.price.date, direction: dir, label: result.final.label, price: a.price.close, detail: result.final.relation, confidence: result.confidence });
   }
-  recordPrediction({ source: 'ai', symbol: a.symbol, date: a.price.date, direction: AI_DIRECTION[result.decision], label: result.decisionLabel, price: a.price.close, detail: `Tin cậy ${result.confidence}%`, confidence: result.confidence });
+  // Lãi kỳ vọng theo kịch bản AI (giá kỳ vọng / giá hiện tại − 1) để chấm sai số và độ hiệu chỉnh của con số % AI đưa ra
+  const ex = result.forecast?.expected;
+  const expected = ex && a.price.close ? Object.fromEntries([5, 10, 20].filter((h) => Number.isFinite(ex[`p${h}`])).map((h) => [h, Math.round((ex[`p${h}`] / a.price.close - 1) * 1e4) / 1e4])) : undefined;
+  recordPrediction({ source: 'ai', symbol: a.symbol, date: a.price.date, direction: AI_DIRECTION[result.decision], label: result.decisionLabel, price: a.price.close, detail: `Tin cậy ${result.confidence}%`, confidence: result.confidence, expected });
   return result;
 }
 

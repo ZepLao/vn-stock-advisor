@@ -107,9 +107,10 @@ async function syncPredictions() {
   const since = last ? last.getTime() - 60_000 : 0;
   const fresh = log.filter((x) => !x.recordedAt || Date.parse(x.recordedAt) > since);
   if (!fresh.length) return 0;
-  await upsert('prediction_log', ['id', 'source', 'symbol', 'date', 'direction', 'label', 'price', 'detail', 'score', 'confidence', 'band', 'plan', 'partial', 'version', 'recorded_at'],
+  await upsert('prediction_log', ['id', 'source', 'symbol', 'date', 'direction', 'label', 'price', 'detail', 'score', 'confidence', 'band', 'plan', 'partial', 'version', 'recorded_at', 'expected', 'expected_excess', 'flags'],
     fresh.map((x) => [x.id, x.source, x.symbol, x.date, x.direction, x.label, x.price, x.detail ?? null, x.score ?? null, x.confidence ?? null,
-      x.band ?? null, x.plan ?? null, x.partial ?? null, x.version ?? null, x.recordedAt ?? null]), ['id'], { update: false });
+      x.band ?? null, x.plan ?? null, x.partial ?? null, x.version ?? null, x.recordedAt ?? null,
+      x.expected ?? null, x.expectedExcess ?? null, x.flags ?? null]), ['id'], { update: false });
   const idx = (await getPriceHistory('VNINDEX').catch(() => null))?.bars || [];
   const at = new Map(idx.map((b, k) => [b.time, k]));
   const touched = new Set(fresh.map((x) => `${x.source}|${x.symbol}|${x.date}`));

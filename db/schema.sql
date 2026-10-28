@@ -94,6 +94,9 @@ CREATE TABLE IF NOT EXISTS prediction_log (
   recorded_at  timestamptz
 );
 CREATE INDEX IF NOT EXISTS prediction_log_key ON prediction_log (source, symbol, date);
+ALTER TABLE prediction_log ADD COLUMN IF NOT EXISTS expected jsonb;
+ALTER TABLE prediction_log ADD COLUMN IF NOT EXISTS expected_excess jsonb;
+ALTER TABLE prediction_log ADD COLUMN IF NOT EXISTS flags jsonb;
 ALTER TABLE predictions ADD COLUMN IF NOT EXISTS version text;
 ALTER TABLE predictions ADD COLUMN IF NOT EXISTS score numeric;
 ALTER TABLE predictions ADD COLUMN IF NOT EXISTS confidence numeric;

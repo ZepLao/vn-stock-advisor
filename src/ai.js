@@ -560,9 +560,10 @@ const PICK_SCHEMA = {
           stopLoss: { type: 'NUMBER' },
           target: { type: 'NUMBER' },
           horizon: { type: 'STRING', description: 'Khung thời gian nắm giữ' },
+          horizonDays: { type: 'INTEGER', description: 'Số PHIÊN giao dịch dự kiến để giá đạt mục tiêu (5–60)' },
         },
-        required: ['symbol', 'verdict', 'confidence', 'thesis', 'trigger', 'mainRisk', 'entryFrom', 'entryTo', 'stopLoss', 'target', 'horizon'],
-        propertyOrdering: ['symbol', 'thesis', 'mainRisk', 'verdict', 'confidence', 'trigger', 'entryFrom', 'entryTo', 'stopLoss', 'target', 'horizon'],
+        required: ['symbol', 'verdict', 'confidence', 'thesis', 'trigger', 'mainRisk', 'entryFrom', 'entryTo', 'stopLoss', 'target', 'horizon', 'horizonDays'],
+        propertyOrdering: ['symbol', 'thesis', 'mainRisk', 'verdict', 'confidence', 'trigger', 'entryFrom', 'entryTo', 'stopLoss', 'target', 'horizon', 'horizonDays'],
       },
     },
     note: { type: 'STRING', description: 'Lưu ý chung về quản lý vốn khi mua các mã này' },
@@ -584,7 +585,10 @@ Nguyên tắc:
 - Thị trường chung xấu thì hạ mức quyết định (MUA → MUA_THAM_DO hoặc CHO_DIEM_MUA) và nói rõ.
 - Mã đã tăng nóng (RSI > 70, xa MA20) thì chọn CHO_DIEM_MUA với vùng mua thấp hơn giá hiện tại.
 - LOAI nếu rủi ro lớn hơn tiềm năng. Được phép loại nhiều mã.
-- Giá tính bằng nghìn đồng; cắt lỗ < vùng mua < mục tiêu; tỷ lệ lợi nhuận/rủi ro nên ≥ 1,5.
+- Giá tính bằng nghìn đồng; cắt lỗ < vùng mua < mục tiêu; tỷ lệ lợi nhuận/rủi ro nên ≥ 1,5. horizonDays = số phiên giao dịch.
+- Mỗi mã có "Thống kê lịch sử" của nhóm điểm (4 năm, rổ theo thời điểm): lãi hơn rổ trung bình và khoảng p10–p90 sau 20 phiên.
+  Đó là căn cứ cho con số %: mục tiêu vượt p90 + lãi của rổ thì phải nêu rõ lý do riêng của mã (tin, kết quả kinh doanh);
+  không có lý do riêng thì đặt mục tiêu trong khoảng đó. Mục tiêu và horizonDays sẽ được chấm lại khi đủ phiên.
 - Viết tiếng Việt CÓ DẤU đầy đủ, ngắn gọn, có con số. Trong văn bản không viết mã kỹ thuật như CHO_DIEM_MUA, MUA_THAM_DO;
   dùng "chờ điểm mua", "mua thăm dò".`;
 
@@ -610,6 +614,8 @@ function pickPrompt(cands, marketFlow, market) {
     L.push(`P/E ${f.pe?.toFixed?.(1) ?? 'n/a'}, P/B ${f.pb?.toFixed?.(2) ?? 'n/a'}, ROE ${f.roe != null ? (f.roe * 100).toFixed(1) + '%' : 'n/a'}, LN 4Q ${f.profitGrowthTTM != null ? (f.profitGrowthTTM * 100).toFixed(0) + '%' : 'n/a'}, DT 4Q ${f.revenueGrowthTTM != null ? (f.revenueGrowthTTM * 100).toFixed(0) + '%' : 'n/a'}`);
     if (c.foreign) L.push(`Khối ngoại: 5 phiên ${(c.foreign.net5 / 1e9).toFixed(1)} tỷ, 20 phiên ${(c.foreign.net20 / 1e9).toFixed(1)} tỷ`);
     if (c.plan) L.push(`Hỗ trợ ${c.plan.support}, kháng cự ${c.plan.resistance}, ATR ${c.plan.atr}`);
+    const ex = c.expectation?.h20;
+    if (ex) L.push(`Thống kê lịch sử nhóm điểm ${c.expectation.bucket.from}–${c.expectation.bucket.to} ${c.expectation.bucket.aboveMa200 ? 'trên' : 'dưới'} MA200 (4 năm): sau 20 phiên hơn rổ TB ${(ex.meanExcess * 100).toFixed(1)}%, p10 ${(ex.p10 * 100).toFixed(1)}%, p90 ${(ex.p90 * 100).toFixed(1)}%, thắng rổ ${Math.round(ex.pBeat * 100)}%, lãi tuyệt đối TB ${(ex.meanReturn * 100).toFixed(1)}%${ex.significant ? '' : ' (chưa có ý nghĩa thống kê)'}`);
     for (const n of (c.news || []).slice(0, 4)) L.push(`- Tin [${n.label}${n.reaction ? `, giá ${n.reaction.pct}%` : ''}]: ${n.title}`);
   }
   L.push('\nĐánh giá từng mã và trả về JSON theo schema.');
@@ -645,6 +651,7 @@ export async function aiPickStocks(cands, { marketFlow = null, market = null } =
       stopLoss: sl != null && (lo == null || sl < lo) ? sl : null,
       target: tg != null && tg > (hi ?? c.close) ? tg : null,
       horizon: String(p.horizon || ''),
+      horizonDays: Number.isFinite(p.horizonDays) ? Math.min(60, Math.max(5, Math.round(p.horizonDays))) : 20,
     };
   }).filter(Boolean);
   return {

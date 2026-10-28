@@ -113,6 +113,14 @@ export function buildBrief(a, sector = null, holding = null, bars = null, risk =
       : `Giá trên MA200 (${num(i.sma200)}): xu hướng dài hạn tăng`);
   }
 
+  // Kỳ vọng thống kê của nhóm điểm (expectancy.js): mức hơn rổ trung bình sau 20 phiên và khoảng 80% số lần
+  const ex = a.expectation?.h20;
+  if (ex) {
+    const b = a.expectation.bucket;
+    add(ex.meanExcess > 0.003 ? 'up' : ex.meanExcess < -0.003 ? 'down' : 'ref',
+      `Lịch sử 4 năm, nhóm điểm ${b.from}–${b.to} ${b.aboveMa200 ? 'trên' : 'dưới'} MA200: sau 20 phiên hơn rổ TB ${pct(ex.meanExcess, 1)} (80% số lần từ ${pct(ex.p10)} đến ${pct(ex.p90)}), thắng rổ ${Math.round(ex.pBeat * 100)}%${ex.significant ? '' : ', chưa có ý nghĩa thống kê'}`);
+  }
+
   // 2. Cơ bản: lỗ/lãi, định giá, tăng trưởng (gộp 1 dòng)
   if (f.epsTTM != null && f.epsTTM <= 0) add('down', 'Doanh nghiệp đang lỗ 4 quý gần nhất');
   else if (f.pe != null || f.roe != null) {

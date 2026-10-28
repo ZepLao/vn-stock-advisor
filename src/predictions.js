@@ -34,6 +34,7 @@ export const SOURCES = {
   outlook_sector: 'Mã thuộc ngành AI dự báo triển vọng tuần',
   prio_main: 'Bản tin: mã AI xếp ƯU TIÊN MUA',
   prio_spec: 'Bản tin: mã AI xếp ĐẦU CƠ',
+  funnel: 'Phễu Tiềm năng: mọi mã đã quét kèm bộ lọc đạt / rớt (để kiểm chứng từng bộ lọc)',
 };
 
 let state = null;
@@ -93,10 +94,13 @@ export function flushPredictions() {
  * Ghi một dự đoán (thêm dòng mới, không sửa bản cũ). Bỏ qua nếu giống hệt bản ghi gần nhất cùng (nguồn, mã, phiên)
  * và cùng phiên bản mô hình — tránh phình sổ khi quét lại mỗi 10 phút.
  * @param {{ source: string, symbol: string, date: string, direction: -1|0|1, label: string, price?: number, detail?: string,
- *   score?: number, confidence?: number, band?: object, plan?: object, partial?: boolean }} p
+ *   score?: number, confidence?: number, band?: object, plan?: object, partial?: boolean,
+ *   expected?: object, expectedExcess?: object, flags?: object }} p
  *   score: điểm liên tục của nguồn (vd điểm xếp hạng 0–100) để tính IC; confidence: độ tự tin AI (%);
- *   band: { 5: [p05, p95], 10: [...], 20: [...] } dải giá; plan: { buyFrom, buyTo, stop, target, weight };
- *   partial: dự đoán dựa trên nến trong phiên (chưa chốt).
+ *   band: { 5: [p05, p95], 10: [...], 20: [...] } dải giá;
+ *   plan: { buyFrom, buyTo, stop, target, horizonDays, weight } kế hoạch lệnh (horizonDays = số phiên nắm giữ);
+ *   expected: { h: % } lãi dự báo sau h phiên (vd kỳ vọng theo kịch bản AI); expectedExcess: { h: % } lãi hơn rổ dự báo
+ *   (bảng kỳ vọng thống kê); flags: cờ bộ lọc (phễu Tiềm năng); partial: dự đoán dựa trên nến trong phiên (chưa chốt).
  */
 export async function recordPrediction(p) {
   if (!SOURCES[p.source] || !p.symbol || !/^\d{4}-\d{2}-\d{2}$/.test(p.date || '')) return;
@@ -105,12 +109,14 @@ export async function recordPrediction(p) {
     id: randomUUID(), source: p.source, symbol: p.symbol, date: p.date, direction: Math.sign(p.direction || 0),
     label: String(p.label || ''), price: p.price ?? null, detail: p.detail ? String(p.detail).slice(0, 160) : undefined,
     score: num(p.score), confidence: num(p.confidence), band: p.band ?? undefined, plan: p.plan ?? undefined,
+    expected: p.expected ?? undefined, expectedExcess: p.expectedExcess ?? undefined, flags: p.flags ?? undefined,
     partial: p.partial ? true : undefined,
     version: modelVersion(), recordedAt: new Date().toISOString(),
   };
   const prev = state.last.get(keyOf(item));
   const same = prev && prev.version === item.version && ['direction', 'label', 'score', 'confidence', 'partial']
-    .every((k) => (prev[k] ?? null) === (item[k] ?? null)) && JSON.stringify(prev.plan ?? null) === JSON.stringify(item.plan ?? null);
+    .every((k) => (prev[k] ?? null) === (item[k] ?? null))
+    && ['plan', 'expected', 'expectedExcess', 'flags'].every((k) => JSON.stringify(prev[k] ?? null) === JSON.stringify(item[k] ?? null));
   if (same) return;
   state.items.push(item);
   state.last.set(keyOf(item), item);
@@ -239,8 +245,49 @@ export function scoredPredictions() {
     }
     const basket = basketReturns(bars, idx);
     const scored = items.map((it) => ({ ...it, result: bars[it.symbol] ? scoreItem(it, bars[it.symbol], idx, basket) : null }));
-    return { scored, late, bars, index: idx };
+    return { scored, late, bars, index: idx, basket };
   });
+}
+
+export const PLAN_RULES = { fillDays: 5, horizonDays: 20 };
+
+/**
+ * Chấm một kế hoạch lệnh (plan) như người dùng làm theo: lệnh mua giới hạn ở cận trên vùng mua (không có vùng thì giá mở cửa
+ * phiên sau), hiệu lực PLAN_RULES.fillDays phiên; khớp rồi thì ĐÓNG CỬA dưới cắt lỗ → bán mở cửa phiên sau, giá cao nhất
+ * chạm mục tiêu → bán ở mục tiêu (mở cửa vượt thì giá mở cửa), hết horizonDays phiên → bán giá đóng cửa.
+ * Cùng phiên chạm mục tiêu và đóng cửa dưới cắt lỗ thì tính cắt lỗ (thận trọng).
+ * @returns {{ outcome: 'no_fill'|'stop'|'target'|'time', entry?, exit?, ret?, days?, targetPct?, stopPct? }|null} null = chưa đủ phiên
+ */
+export function scorePlan(item, bars, R = PLAN_RULES) {
+  const p = item.plan;
+  if (!p?.target || !p?.stop) return null;
+  const i = bars.findIndex((b) => b.time === item.date);
+  if (i < 0) return null;
+  const limit = p.buyTo ?? p.entryTo ?? null;
+  let f = -1, entry = null;
+  for (let k = i + 1; k <= i + R.fillDays && k < bars.length; k++) {
+    const b = bars[k];
+    if (limit == null) { f = k; entry = b.open > 0 ? b.open : bars[k - 1].close; break; }
+    if (b.low <= limit) { f = k; entry = Math.min(b.open, limit); break; }
+  }
+  if (f < 0) return i + R.fillDays < bars.length ? { outcome: 'no_fill' } : null;
+  const H = Math.max(1, Math.round(p.horizonDays || R.horizonDays));
+  const base = { entry, targetPct: p.target / entry - 1, stopPct: p.stop / entry - 1 };
+  for (let k = f; k < f + H && k < bars.length; k++) {
+    const b = bars[k];
+    if (b.close < p.stop) {
+      if (k + 1 >= bars.length) return null; // chưa có phiên bán
+      const exit = bars[k + 1].open;
+      return { ...base, outcome: 'stop', exit, ret: exit / entry - 1, days: k + 1 - f };
+    }
+    if (b.high >= p.target) {
+      const exit = Math.max(b.open, p.target);
+      return { ...base, outcome: 'target', exit, ret: exit / entry - 1, days: k - f };
+    }
+  }
+  if (f + H - 1 >= bars.length) return null;
+  const exit = bars[f + H - 1].close;
+  return { ...base, outcome: 'time', exit, ret: exit / entry - 1, days: H };
 }
 
 /** Tổng hợp độ chính xác theo nguồn và khung thời gian (cache 10 phút). */
@@ -249,7 +296,7 @@ export function evaluatePredictions() {
     const { scored, late, bars } = await scoredPredictions();
     const items = scored;
 
-    const summary = Object.entries(SOURCES).map(([source, label]) => {
+    const summary = Object.entries(SOURCES).filter(([source]) => source !== 'funnel').map(([source, label]) => {
       const mine = scored.filter((x) => x.source === source);
       const horizons = HORIZONS.map((h) => {
         const done = mine.filter((x) => x.direction && x.result?.[h]);

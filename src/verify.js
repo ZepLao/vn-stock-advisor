@@ -8,7 +8,9 @@
 // Newey-West (độ trễ h − 1) vì các cửa sổ h phiên chồng nhau. |t| ≥ 2 mới kết luận; dưới VERIFY_RULES.minDates phiên
 // thì báo "chưa đủ dữ liệu" dù t lớn.
 import { cached } from './http.js';
-import { scoredPredictions, HORIZONS } from './predictions.js';
+import { scoredPredictions, scorePlan, HORIZONS } from './predictions.js';
+import { getPriceHistory } from './data.js';
+import { newsEvents, scoreNewsEvent, NEWS_HORIZONS } from './newsevents.js';
 
 export const VERIFY_RULES = {
   minDates: 20,     // số phiên tối thiểu trước khi được kết luận
@@ -170,9 +172,132 @@ export function verifyFromScored(scored, R = VERIFY_RULES) {
 }
 
 /** Kiểm chứng trên dữ liệu thật (cache 10 phút, xóa khi có dự đoán mới). */
+// ---------- Phần khám phá: không dùng để kết luận như 4 giả thuyết chính, nhưng cùng cách kiểm định ----------
+
+/**
+ * Con số % dự báo có sát không: so dự báo với thực tế (cùng cách tính lãi: mua mở cửa phiên sau).
+ * - expected (kịch bản AI): lãi dự báo so với lãi thật sau h phiên;
+ * - expectedExcess (bảng kỳ vọng thống kê): lãi hơn rổ dự báo so với lãi hơn rổ thật.
+ * slope = hệ số hồi quy thực tế theo dự báo: 1 là chuẩn, < 1 là dự báo phóng đại (thực tế chỉ được một phần), ≤ 0 là vô ích.
+ * mae so với maeNaive (luôn dự báo 0%): nhỏ hơn mới có ích.
+ */
+export function pctCalibration(scored) {
+  const rows = [];
+  const fit = (pairs) => {
+    if (pairs.length < 3) return { n: pairs.length };
+    const mp = mean(pairs.map((p) => p[0])), ma = mean(pairs.map((p) => p[1]));
+    let c = 0, v = 0;
+    for (const [p, a] of pairs) { c += (p - mp) * (a - ma); v += (p - mp) ** 2; }
+    return {
+      n: pairs.length, meanPred: r4(mp), meanActual: r4(ma),
+      mae: r4(mean(pairs.map(([p, a]) => Math.abs(a - p)))), maeNaive: r4(mean(pairs.map(([, a]) => Math.abs(a)))),
+      slope: v ? r4(c / v) : null,
+      signHit: r4(pairs.filter(([p, a]) => p !== 0 && Math.sign(p) === Math.sign(a)).length / Math.max(1, pairs.filter(([p]) => p !== 0).length)),
+    };
+  };
+  for (const [kind, field, actual] of [['Kịch bản AI (lãi)', 'expected', 'ret'], ['Bảng kỳ vọng (hơn rổ)', 'expectedExcess', 'excessBasket']]) {
+    const bySource = new Map();
+    for (const x of scored) if (x[field]) { if (!bySource.has(x.source)) bySource.set(x.source, []); bySource.get(x.source).push(x); }
+    for (const [source, xs] of bySource) {
+      for (const h of HORIZONS) {
+        const pairs = xs.map((x) => [x[field][h], x.result?.[h]?.[actual]]).filter(([p, a]) => Number.isFinite(p) && Number.isFinite(a));
+        if (pairs.length || xs.some((x) => Number.isFinite(x[field][h]))) rows.push({ kind, source, h, ...fit(pairs), recorded: xs.filter((x) => Number.isFinite(x[field][h])).length });
+      }
+    }
+  }
+  return rows;
+}
+
+/** Kế hoạch lệnh (vùng mua, cắt lỗ, mục tiêu, số phiên) đi đến đâu: khớp không, chạm mục tiêu hay cắt lỗ, lãi thật so với mục tiêu hứa. */
+export function planOutcomes(scored, bars) {
+  const out = [];
+  const bySource = new Map();
+  for (const x of scored) if (x.plan?.target && x.plan?.stop && x.direction > 0) { if (!bySource.has(x.source)) bySource.set(x.source, []); bySource.get(x.source).push(x); }
+  for (const [source, xs] of bySource) {
+    const res = xs.map((x) => (bars[x.symbol] ? scorePlan(x, bars[x.symbol]) : null)).filter(Boolean);
+    const filled = res.filter((r) => r.outcome !== 'no_fill');
+    const cnt = (k) => filled.filter((r) => r.outcome === k).length;
+    out.push({
+      source, recorded: xs.length, done: res.length, noFill: res.length - filled.length, filled: filled.length,
+      target: cnt('target'), stop: cnt('stop'), time: cnt('time'),
+      targetRate: filled.length ? r4(cnt('target') / filled.length) : null,
+      avgRet: r4(mean(filled.map((r) => r.ret))), avgTargetPct: r4(mean(filled.map((r) => r.targetPct))),
+      avgStopPct: r4(mean(filled.map((r) => r.stopPct))), avgDays: r4(mean(filled.map((r) => r.days))),
+    });
+  }
+  return out;
+}
+
+/** Từng bộ lọc của phễu Tiềm năng: nhóm ĐẠT hơn nhóm RỚT bao nhiêu (lãi hơn rổ, mỗi phiên một giá trị, t Newey-West). */
+export function filterTests(scored, R = VERIFY_RULES) {
+  const funnel = scored.filter((x) => x.source === 'funnel' && x.flags);
+  if (!funnel.length) return [];
+  const setupIds = [...new Set(funnel.flatMap((x) => x.flags.setups || []))];
+  const flags = [
+    ['liquidity', 'Thanh khoản đều'], ['quality', 'Cổ ngon (cơ bản)'], ['sector', 'Ngành được mua ròng 5 phiên'],
+    ['trend', 'Xu hướng (≥ 70, trên MA200, không rủi ro)'], ['risk', 'Bị cờ rủi ro rơi tự do'], ['trendPick', 'Trend Pick'],
+    ['final', 'Vào danh sách cuối'], ...setupIds.map((id) => [`setup:${id}`, `Setup ${id}`]),
+  ];
+  const has = (x, k) => (k.startsWith('setup:') ? (x.flags.setups || []).includes(k.slice(6)) : Boolean(x.flags[k]));
+  const out = [];
+  for (const [k, label] of flags) {
+    for (const h of [5, 20]) {
+      const daily = byDate(funnel.filter((x) => x.result?.[h]?.excessBasket != null)).map(([, xs]) => {
+        const a = xs.filter((x) => has(x, k)).map((x) => x.result[h].excessBasket), b = xs.filter((x) => !has(x, k)).map((x) => x.result[h].excessBasket);
+        return a.length && b.length ? mean(a) - mean(b) : null;
+      }).filter((v) => v != null);
+      const passed = funnel.filter((x) => has(x, k)).length;
+      out.push({ key: k, label, h, passed, failed: funnel.length - passed, ...testSeries(daily, h - 1, null, R) });
+    }
+  }
+  return out;
+}
+
+/** Tác động của tin: lãi bất thường sau tin theo nhãn (tốt / xấu / trung lập, AI xác nhận rủi ro) và nhóm sự kiện. */
+export function newsImpact(events, scoreOf, R = VERIFY_RULES) {
+  const scoredEv = events.map((e) => ({ ...e, r: scoreOf(e) })).filter((e) => e.r);
+  const groups = [
+    ['tich_cuc', 'Tin tích cực', (e) => e.label === 'tich_cuc'], ['tieu_cuc', 'Tin tiêu cực', (e) => e.label === 'tieu_cuc'],
+    ['trung_lap', 'Tin trung lập', (e) => e.label === 'trung_lap'], ['ai_risk', 'AI xác nhận rủi ro nghiêm trọng', (e) => e.aiRisk === true],
+    ...[...new Set(scoredEv.flatMap((e) => e.categories || []))].map((c) => [`cat:${c}`, `Nhóm: ${c}`, (e) => (e.categories || []).includes(c)]),
+  ];
+  const out = [];
+  for (const [key, label, f] of groups) {
+    const xs = scoredEv.filter(f);
+    if (!xs.length) continue;
+    const row = { key, label, events: xs.length, gap: r4(mean(xs.map((e) => e.r.gap).filter(Number.isFinite))) };
+    for (const h of NEWS_HORIZONS) {
+      const daily = [...xs.reduce((m, e) => {
+        const v = e.r[h]?.abnormal;
+        if (Number.isFinite(v)) { if (!m.has(e.r.session)) m.set(e.r.session, []); m.get(e.r.session).push(v); }
+        return m;
+      }, new Map()).values()].map((v) => mean(v));
+      row[h] = testSeries(daily, h - 1, null, R);
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+/** Kiểm chứng trên dữ liệu thật (cache 10 phút, xóa khi có dự đoán mới). */
 export function getVerification() {
   return cached('verify', 10 * 60_000, async () => {
-    const { scored } = await scoredPredictions();
-    return { updatedAt: new Date().toISOString(), ...verifyFromScored(scored) };
+    const { scored, bars, index, basket } = await scoredPredictions();
+    const events = await newsEvents().catch(() => []);
+    // Giá các mã chỉ có trong sổ tin (chưa có trong sổ dự đoán)
+    const evBars = { ...bars };
+    for (const s of [...new Set(events.map((e) => e.symbol))].filter((s) => !(s in evBars))) {
+      evBars[s] = (await getPriceHistory(s).catch(() => null))?.bars || null;
+    }
+    return {
+      updatedAt: new Date().toISOString(), ...verifyFromScored(scored),
+      explore: {
+        pct: pctCalibration(scored),
+        plans: planOutcomes(scored, bars),
+        filters: filterTests(scored),
+        news: newsImpact(events, (e) => (evBars[e.symbol] ? scoreNewsEvent(e, evBars[e.symbol], index, basket) : null)),
+        newsEvents: events.length,
+      },
+    };
   });
 }

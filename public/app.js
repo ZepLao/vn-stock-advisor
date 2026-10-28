@@ -1367,6 +1367,14 @@ function pickWeight(entry, stop, verdict) {
   return verdict === 'MUA' ? w : w / 2;
 }
 
+// Kỳ vọng thống kê của nhóm điểm (expectancy.js): TB hơn rổ, khoảng p10–p90, tỷ lệ thắng rổ
+function expCell(e) {
+  const x = e?.h20;
+  if (!x) return '<span class="muted small">chưa có</span>';
+  return `<b class="${dirClass(x.meanExcess)}">${signed(x.meanExcess * 100, 1)}%</b> <span class="muted small">so rổ</span>
+    <div class="muted small">${signed(x.p10 * 100, 0)}% … ${signed(x.p90 * 100, 0)}% · thắng ${Math.round(x.pBeat * 100)}%${x.significant ? '' : ' · chưa ý nghĩa'}</div>`;
+}
+
 function renderPickSummary(kept) {
   const el = $('pk-summary');
   el.hidden = !kept.length;
@@ -1393,7 +1401,8 @@ function renderPickSummary(kept) {
       <td>${fmt(c.close)} <span class="${dirClass(c.changePct)} small">${signed(c.changePct)}%</span></td>
       <td><span class="st-badge ${tone}">${act}</span>${p ? ` <span class="muted small">${p.confidence}%</span>` : ''}<div class="small muted">${esc(when)}</div></td>
       <td>${entry ? `${fmt(entry.from)}–${fmt(entry.to)}` : '–'}</td>
-      <td class="down">${fmt(stop)}</td><td class="up">${fmt(target)}</td>
+      <td class="down">${fmt(stop)}</td><td class="up">${fmt(target)}${target && ref ? `<div class="small">${signed((target / ref - 1) * 100, 1)}%${p?.horizonDays ? ` · ${p.horizonDays} phiên` : ''}</div>` : ''}</td>
+      <td>${expCell(c.expectation)}</td>
       <td>${Math.round(w * 1000) / 10}%${cap ? ` · <b>${sh.toLocaleString('vi-VN')} cp</b> <span class="muted small">≈ ${fmtBig(sh * ref * 1000)}</span>` : ''}</td>
     </tr>`;
   }).join('');
@@ -1403,9 +1412,10 @@ function renderPickSummary(kept) {
       <h3>📋 Gợi ý cổ phiếu</h3>
       <div class="muted small">${now ? `${now} mã có thể mua ngay / mua thăm dò` : 'Chưa có mã nào nên mua ngay: tất cả đang chờ giá về vùng mua'} · ${kept.length} mã đạt đủ 4 lớp lọc và được Gemini giữ lại${cap ? ` · vốn ${fmtBig(cap)}` : ' · nhập vốn ở trang mã bất kỳ (ô "Tổng vốn") để xem số cổ phiếu'}</div>
     </div></div>
-    <div class="tbl-wrap"><table class="tbl pk-sum-table"><thead><tr><th>#</th><th>Mã · ngành</th><th>Giá</th><th>Hành động</th><th>Vùng mua</th><th>Cắt lỗ</th><th>Mục tiêu</th><th>Tỷ trọng · số cp</th></tr></thead>
+    <div class="tbl-wrap"><table class="tbl pk-sum-table"><thead><tr><th>#</th><th>Mã · ngành</th><th>Giá</th><th>Hành động</th><th>Vùng mua</th><th>Cắt lỗ</th><th>Mục tiêu (AI)</th><th>Thống kê 20 phiên</th><th>Tỷ trọng · số cp</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
-    <p class="muted small" style="margin:6px 0 0">Tỷ trọng tính theo rủi ro: nếu chạm cắt lỗ chỉ mất ~1% tổng vốn (tối đa 20%/mã); mua thăm dò và đặt lệnh chờ dùng một nửa. "Đặt lệnh chờ" = đặt lệnh mua giới hạn ở vùng mua, không mua đuổi giá hiện tại.</p>`;
+    <p class="muted small" style="margin:6px 0 0">"Thống kê 20 phiên" = trong 4 năm, các mã cùng nhóm điểm xếp hạng hơn rổ chia đều trung bình bao nhiêu sau 20 phiên và khoảng 80% số lần (p10–p90); đây là con số có căn cứ, mục tiêu của AI chỉ là ý kiến và sẽ được chấm lại.
+      Tỷ trọng tính theo rủi ro: nếu chạm cắt lỗ chỉ mất ~1% tổng vốn (tối đa 20%/mã); mua thăm dò và đặt lệnh chờ dùng một nửa. "Đặt lệnh chờ" = đặt lệnh mua giới hạn ở vùng mua, không mua đuổi giá hiện tại.</p>`;
 }
 
 const PICK_STATUS = {
@@ -2471,7 +2481,36 @@ function verificationHtml(v) {
     <p class="muted small" style="margin:6px 0 14px">IC điểm xếp hạng: 5 phiên ${v.ic[5].mean ?? '–'} (t ${v.ic[5].t ?? '–'}, ${v.ic[5].n} phiên) · 10 phiên ${v.ic[10].mean ?? '–'} · 20 phiên ${v.ic[20].mean ?? '–'}.
       Phiên bản mô hình: ${Object.entries(v.versions).map(([k, n]) => `${esc(k)} (${n})`).join(', ')}.</p>
     ${calib ? `<details style="margin-bottom:14px"><summary class="muted small" style="cursor:pointer">Độ tự tin của AI có đúng không (tỷ lệ đúng so rổ, 10 phiên)</summary>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Nguồn</th><th>Tự tin thấp (&lt;60)</th><th>Vừa (60–74)</th><th>Cao (≥75)</th></tr></thead><tbody>${calib}</tbody></table></div></details>` : ''}`;
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Nguồn</th><th>Tự tin thấp (&lt;60)</th><th>Vừa (60–74)</th><th>Cao (≥75)</th></tr></thead><tbody>${calib}</tbody></table></div></details>` : ''}
+    ${exploreHtml(v.explore)}`;
+}
+
+// Phần khám phá: con số % có sát không, kế hoạch lệnh, từng bộ lọc của phễu Tiềm năng, tác động của tin
+function exploreHtml(x) {
+  if (!x) return '';
+  const tv = (t) => (t?.t == null ? '–' : `${t.mean != null ? signed(t.mean * 100, 2) + '%' : '–'} <span class="muted small">t ${t.t} · ${t.n} phiên</span>`);
+  const pctRows = x.pct.map((r) => `<tr><td style="font-family:inherit">${esc(r.kind)} · ${r.source}</td><td>${r.h}</td><td>${r.n ?? 0} <span class="muted small">/ ${r.recorded}</span></td>
+    <td>${r.meanPred != null ? signed(r.meanPred * 100, 1) + '%' : '–'}</td><td>${r.meanActual != null ? signed(r.meanActual * 100, 1) + '%' : '–'}</td>
+    <td>${r.mae != null ? `${fmt(r.mae * 100, 1)}% <span class="muted small">(đoán 0%: ${fmt(r.maeNaive * 100, 1)}%)</span>` : '–'}</td><td>${r.slope ?? '–'}</td></tr>`).join('');
+  const planRows = x.plans.map((r) => `<tr><td>${r.source}</td><td>${r.done}/${r.recorded}</td><td>${r.noFill}</td><td>${r.filled}</td>
+    <td>${r.targetRate != null ? fmt(r.targetRate * 100, 0) + '%' : '–'} <span class="muted small">${r.target} chạm · ${r.stop} cắt lỗ · ${r.time} hết hạn</span></td>
+    <td>${r.avgRet != null ? signed(r.avgRet * 100, 1) + '%' : '–'}</td><td>${r.avgTargetPct != null ? signed(r.avgTargetPct * 100, 1) + '%' : '–'}</td></tr>`).join('');
+  const filt = x.filters.filter((r) => r.h === 20).map((r) => {
+    const r5 = x.filters.find((y) => y.key === r.key && y.h === 5);
+    return `<tr><td style="font-family:inherit">${esc(r.label)}</td><td>${r.passed}/${r.passed + r.failed}</td><td>${tv(r5)}</td><td>${tv(r)}</td><td>${(VERDICT[r.verdict] || ['', ''])[1]}</td></tr>`;
+  }).join('');
+  const news = x.news.map((r) => `<tr><td style="font-family:inherit">${esc(r.label)}</td><td>${r.events}</td><td>${r.gap != null ? signed(r.gap * 100, 2) + '%' : '–'}</td><td>${tv(r[1])}</td><td>${tv(r[5])}</td><td>${tv(r[20])}</td></tr>`).join('');
+  const box = (title, note, head, rows, empty) => `<details style="margin-bottom:10px"><summary class="muted small" style="cursor:pointer">${title}</summary>
+    <p class="muted small" style="margin:6px 0">${note}</p>${rows ? `<div class="tbl-wrap"><table class="tbl"><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="muted small">${empty}</p>`}</details>`;
+  return `<h3 style="margin:14px 0 6px">Khám phá thêm (chưa dùng để kết luận)</h3>
+    ${box('Con số % dự báo có sát không', 'So % dự báo với thực tế cùng cách tính. Hệ số (slope) 1 là chuẩn, nhỏ hơn 1 là dự báo phóng đại; sai số phải nhỏ hơn cách "đoán 0%" mới có ích.',
+      ['Loại · nguồn', 'Phiên', 'Đã chấm / đã ghi', 'Dự báo TB', 'Thực tế TB', 'Sai số TB', 'Hệ số'], pctRows, 'Chưa có dự báo % nào được ghi (bắt đầu từ lần khởi động lại server).')}
+    ${box('Kế hoạch lệnh: khớp, chạm mục tiêu hay cắt lỗ', 'Mua giới hạn ở cận trên vùng mua (hiệu lực 5 phiên); đóng cửa dưới cắt lỗ thì bán mở cửa phiên sau; chạm mục tiêu thì bán; hết số phiên thì bán.',
+      ['Nguồn', 'Đã chấm', 'Không khớp', 'Đã khớp', 'Chạm mục tiêu', 'Lãi thật TB', 'Mục tiêu hứa TB'], planRows, 'Chưa có kế hoạch nào đủ phiên để chấm.')}
+    ${box('Bộ lọc Tiềm năng: nhóm đạt hơn nhóm rớt bao nhiêu', 'Mỗi phiên lấy chênh lãi hơn rổ giữa mã đạt và mã rớt bộ lọc trong cùng lần quét; dương có ý nghĩa = bộ lọc giúp chọn mã tốt hơn.',
+      ['Bộ lọc', 'Đạt', 'Sau 5 phiên', 'Sau 20 phiên', 'Kết luận (20 phiên)'], filt, 'Chưa có dữ liệu phễu (ghi từ lần quét Tiềm năng kế tiếp).')}
+    ${box(`Tác động của tin tức (${x.newsEvents} tin đã thu thập)`, 'Lãi bất thường = lãi của mã từ giá mở cửa phiên đầu tiên sau giờ đăng tin, trừ lãi rổ cùng thời gian. "Gap" = giá đã chạy bao nhiêu trước khi kịp mua.',
+      ['Nhóm tin', 'Số tin', 'Gap TB', 'Sau 1 phiên', 'Sau 5 phiên', 'Sau 20 phiên'], news, 'Chưa có tin nào đủ phiên để đo.')}`;
 }
 
 async function loadPredictions() {

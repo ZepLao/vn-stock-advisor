@@ -337,6 +337,27 @@ async function pool(items, worker, onDone) {
 
 const RISK_WARNING = /tin rủi ro nghiêm trọng|đang lỗ/;
 
+// Kế hoạch lệnh của mã AI chọn để chấm lại (vùng mua, cắt lỗ, mục tiêu, số phiên); thiếu cắt lỗ / mục tiêu thì không chấm
+const pickPlan = (p) => (p.stopLoss && p.target ? {
+  buyFrom: p.entryZone?.from ?? null, buyTo: p.entryZone?.to ?? null, stop: p.stopLoss, target: p.target, horizonDays: p.horizonDays ?? 20,
+} : undefined);
+const expectedOf = (c) => (c?.expectation ? { 5: c.expectation.h5?.meanExcess ?? null, 20: c.expectation.h20.meanExcess } : undefined);
+
+/**
+ * Ghi MỌI mã đã quét kèm cờ đạt / rớt từng lớp lọc (nguồn 'funnel', không có chiều) để sau vài tháng so sánh nhóm đạt và
+ * nhóm rớt mỗi bộ lọc: bộ lọc nào thật sự giúp chọn mã tốt hơn so với chỉ dùng điểm xếp hạng.
+ */
+export function funnelRecords(scanned, date, trendOk, finalSet = new Set()) {
+  return scanned.map((c) => ({
+    source: 'funnel', symbol: c.symbol, date, direction: 0, label: 'Phễu Tiềm năng', price: c.close, score: c.quick,
+    flags: {
+      liquidity: c.liquidity.pass, quality: c.quality.pass, sector: c.sector.pass, trend: trendOk(c),
+      risk: Boolean(c.stockRisk?.isRisky), trendPick: Boolean(c.trendPick), final: finalSet.has(c.symbol),
+      setups: c.setups.map((x) => x.id),
+    },
+  }));
+}
+
 async function run() {
   const started = Date.now();
   const { bars: indexBars } = await getPriceHistory('VNINDEX');
@@ -392,6 +413,7 @@ async function run() {
       foreign: a.foreign ? { net1: a.foreign.net1, net5: a.foreign.net5, net20: a.foreign.net20, buyDays5: a.foreign.buyDays5 } : null,
       plan: a.plan, overview: a.overview, warnings: a.warnings,
       ranking: a.ranking ? { score: a.ranking.score, label: a.ranking.label, code: a.ranking.code, position: a.ranking.position, universe: a.ranking.universe } : null,
+      expectation: a.expectation ?? null,
       news: a.news.items.filter((n) => n.label !== 'trung_lap').slice(0, 4)
         .map((n) => ({ title: n.title, label: n.label, link: n.link, source: n.source, publishedAt: n.publishedAt, reaction: n.reaction })),
     };
@@ -401,6 +423,8 @@ async function run() {
     .filter((c) => c.quality.pass)
     .sort((a, b) => ((b.combined ?? 0) + (b.trendPick ? 5 : 0)) - ((a.combined ?? 0) + (a.trendPick ? 5 : 0)))
     .slice(0, FINAL_SIZE);
+  // Chỉ ghi phễu khi nến đã chốt (quét tay trong phiên thì bỏ, tránh chấm trên giá chưa chốt)
+  if (!indexBars.at(-1)?.partial) recordMany(funnelRecords(scanned, date, trendOk, new Set(final.map((c) => c.symbol))));
 
   // Bước 3
   state.progress = { stage: 3, label: 'Gemini đánh giá và xếp hạng', done: 0, total: 1 };
@@ -416,6 +440,7 @@ async function run() {
     recordMany(ai.picks.map((p) => ({
       source: 'screener', symbol: p.symbol, date: close.get(p.symbol)?.date || date, direction: PICK_DIRECTION[p.verdict],
       label: p.verdictLabel, price: close.get(p.symbol)?.close, detail: `Tin cậy ${p.confidence}%`, confidence: p.confidence,
+      plan: pickPlan(p), expectedExcess: expectedOf(close.get(p.symbol)),
     })));
   }
 
@@ -474,9 +499,10 @@ export async function rerunScreenerAi() {
       state.status = 'done';
       const byS = new Map(r.candidates.map((c) => [c.symbol, c]));
       recordMany((ai?.picks || []).map((p) => ({
-        source: 'screener', symbol: p.symbol, date: byS.get(p.symbol)?.date || r.date, direction: PICK_DIRECTION[p.verdict],
-        label: p.verdictLabel, price: byS.get(p.symbol)?.close, detail: `Tin cậy ${p.confidence}%`, confidence: p.confidence,
-      })));
+      source: 'screener', symbol: p.symbol, date: byS.get(p.symbol)?.date || r.date, direction: PICK_DIRECTION[p.verdict],
+      label: p.verdictLabel, price: byS.get(p.symbol)?.close, detail: `Tin cậy ${p.confidence}%`, confidence: p.confidence,
+      plan: pickPlan(p), expectedExcess: expectedOf(byS.get(p.symbol)),
+    })));
       await writeFile(FILE, JSON.stringify(r, null, 2), 'utf8');
     });
   return state;
