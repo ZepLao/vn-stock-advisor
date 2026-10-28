@@ -298,12 +298,14 @@ function renderWatchlist() {
 
     const tpBadge = s?.trendPick ? '<span class="st-badge up" style="font-size:9px;padding:1px 4px;margin-left:4px" title="Trend Pick 8 năm">★ TP</span>' : '';
     const riskBadge = s?.stockRisk ? '<span class="st-badge down" style="font-size:9px;padding:1px 4px;margin-left:4px" title="Cảnh báo rủi ro cao">🚨 RỦI RO</span>' : '';
-    const mcTxt = s?.monteCarlo ? ` · <span class="small ${s.monteCarlo.signal.includes('BUY') ? 'up' : s.monteCarlo.signal === 'RISK' || s.monteCarlo.signal === 'SELL' ? 'down' : 'muted'}">🎲 ${s.monteCarlo.signal} (P↑ ${Math.round(s.monteCarlo.probUp * 100)}%)</span>` : '';
-
+    // Một quyết định duy nhất: quyết định cuối (hệ thống + AI) nếu có cho phiên này, không thì khuyến nghị hệ thống.
+    // Bỏ điểm kiểu cũ và tín hiệu Monte Carlo (không dự báo được hướng) khỏi dòng tóm tắt.
+    const fin = w.ai?.final && w.ai.priceDate === s?.price?.date ? w.ai.final : null;
+    const rec = fin ? { code: fin.code, label: fin.label } : s?.recommendation;
     const meta = s
-      ? `<span class="rec-txt ${recColor(s.recommendation.code)}">${esc(s.recommendation.label)}</span> · <span class="num">${s.total}đ</span>${mcTxt}${s.warnings ? ' · ⚠' : ''}`
+      ? `<span class="rec-txt ${recColor(rec.code)}">${esc(rec.label)}</span>${fin ? ' <span class="muted small">(có AI)</span>' : ''}${s.rankScore != null ? ` · <span class="num">xếp hạng ${s.rankScore}</span>` : ''}${s.warnings ? ' · ⚠' : ''}`
       : 'Đang chờ quét…';
-    const aiTxt = w.ai ? ` · AI: <span class="${aiColor(w.ai.decision)}">${esc(w.ai.decisionLabel)}</span>` : '';
+    const aiTxt = '';
     const alertTxt = [w.priceAbove != null && `≥${w.priceAbove}`, w.priceBelow != null && `≤${w.priceBelow}`].filter(Boolean).join(' ');
 
     return `
@@ -1489,7 +1491,7 @@ function pickCard(c, p, rank) {
           <div class="pk-stats">
             <span>Điểm HT ${signed(c.total, 0)}</span>
             ${c.ranking ? `<span title="Điểm xếp hạng 4 yếu tố (0–100)">Xếp hạng ${c.ranking.score}</span>` : ''}
-            ${c.monteCarlo ? `<span title="Mô phỏng Monte Carlo 20 phiên" style="font-weight:600;color:var(--c-primary)">🎲 P(tăng) ${Math.round(c.monteCarlo.probUp * 100)}% (R/R ${c.monteCarlo.rr})</span>` : ''}
+            ${c.expectation?.h20 ? `<span title="Lịch sử 4 năm của nhóm điểm này: hơn rổ TB sau 20 phiên">📊 Thống kê 20 phiên: ${signed(c.expectation.h20.meanExcess * 100, 1)}% so rổ</span>` : ''}
             ${c.foreign ? `<span>NN 20 phiên ${signed(c.foreign.net20 / 1e9, 1)} tỷ</span>` : ''}
             ${f.pe != null ? `<span>P/E ${fmt(f.pe, 1)}</span>` : ''}
             ${f.roe != null ? `<span>ROE ${fmtPct(f.roe)}</span>` : ''}
@@ -2781,39 +2783,37 @@ function mcAndRiskBlock(a) {
       <div style="font-size:12.5px; line-height:1.4;">${esc(a.stockRisk.reasons.join(' · '))}. <b>Khuyến nghị: Tuyệt đối tránh bắt dao rơi, ưu tiên giữ tiền mặt.</b></div>
     </div>`;
   }
+  // Kỳ vọng thống kê (bảng 4 năm, rổ theo thời điểm): con số % có căn cứ, thay cho "xác suất tăng" của mô phỏng
+  const ex = a.expectation?.h20;
+  const badge = a.trendPick ? '<span class="st-badge up" style="margin-left:6px">★ Trend Pick</span>' : '';
+  if (ex) {
+    const b = a.expectation.bucket, lo = Math.min(ex.p10, -0.15), hi = Math.max(ex.p90, 0.15);
+    const at = (v) => Math.round(((v - lo) / (hi - lo)) * 1000) / 10;
+    html += `<div class="bf-ai ref" style="margin-top:10px; border-radius:8px; padding:12px 14px; background:var(--surface-2); border:1px solid var(--border-light)">
+      <div style="font-size:13px; margin-bottom:6px"><b>📊 Kỳ vọng thống kê 20 phiên</b>${badge}
+        <span class="muted small"> · các mã cùng nhóm điểm ${b.from}–${b.to}, ${b.aboveMa200 ? 'trên' : 'dưới'} MA200, 4 năm (${ex.n.toLocaleString('vi-VN')} lần)</span></div>
+      <div style="position:relative; height:12px; border-radius:6px; background:var(--surface-3); margin:10px 0 4px" title="80% số lần nằm trong dải này">
+        <div style="position:absolute; left:${at(ex.p10)}%; width:${at(ex.p90) - at(ex.p10)}%; top:0; bottom:0; border-radius:6px; background:rgba(255,255,255,0.18)"></div>
+        <div style="position:absolute; left:${at(0)}%; top:-3px; bottom:-3px; width:1px; background:var(--muted)" title="Bằng rổ"></div>
+        <div style="position:absolute; left:calc(${at(ex.meanExcess)}% - 4px); top:2px; width:8px; height:8px; border-radius:50%; background:${ex.meanExcess >= 0 ? 'var(--up)' : 'var(--down)'}" title="Trung bình"></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted)"><span>${pct(ex.p10, 0)}</span><span>bằng rổ</span><span>${pct(ex.p90, 0)}</span></div>
+      <div class="small" style="margin-top:6px">Hơn rổ trung bình <b class="${dirClass(ex.meanExcess)}">${pct(ex.meanExcess)}</b> · 80% số lần từ ${pct(ex.p10)} đến ${pct(ex.p90)} · thắng rổ ${fmt(ex.pBeat * 100, 0)}% số lần${a.expectation.h5 ? ` · 5 phiên: ${pct(a.expectation.h5.meanExcess, 2)}` : ''}</div>
+      <div class="muted small">${ex.significant ? 'Khác 0 có ý nghĩa thống kê.' : 'Chưa có ý nghĩa thống kê: lợi thế (nếu có) nhỏ hơn độ dao động.'} Đây là mặt bằng của cả nhóm, từng mã có thể lệch xa.</div>
+    </div>`;
+  } else if (a.ranking) {
+    html += `<div class="muted small" style="margin-top:10px">📊 Kỳ vọng thống kê: đang dựng bảng 4 năm, mở lại sau ít phút.${badge}</div>`;
+  }
+  // Mô phỏng Monte Carlo đã bỏ xu hướng: chỉ đo biên độ và rủi ro, không dự báo hướng
   if (a.monteCarlo) {
     const mc = a.monteCarlo;
-    const tone = mc.signal.includes('BUY') ? 'up' : (mc.signal === 'SELL' || mc.signal === 'RISK' ? 'down' : 'ref');
-    const badge = a.trendPick ? '<span class="st-badge up" style="margin-left:6px; font-weight:700">★ TREND PICK 8Y</span>' : '';
-    const pGain = Math.round(mc.probGain5 * 100);
     const pLoss = Math.round(mc.probLoss7 * 100);
-    const pNeutral = Math.max(0, 100 - pGain - pLoss);
-
-    html += `<div class="bf-ai ${tone}" style="margin-top:10px; border-radius:8px; padding:12px 14px; background:var(--surface-2); border:1px solid var(--border-light)">
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px">
-        <span style="font-size:13px"><b>🎲 Phân phối xác suất Monte Carlo (20 phiên):</b> Tín hiệu <b class="${tone}">${esc(mc.signal)}</b>${badge}</span>
-        <span class="small" style="background:var(--surface-3); padding:3px 8px; border-radius:4px">Tỷ lệ Lời/Lỗ (R/R): <b>${mc.rr}</b></span>
-      </div>
-
-      <!-- Probability Distribution Bar -->
-      <div style="margin:8px 0 6px">
-        <div style="display:flex; height:10px; border-radius:5px; overflow:hidden; background:var(--surface-3); border:1px solid rgba(255,255,255,0.06)">
-          <div style="width:${pGain}%; background:var(--up); transition:width 0.3s" title="Xác suất đỉnh lãi ≥ 5%: ${pGain}%"></div>
-          <div style="width:${pNeutral}%; background:rgba(255,255,255,0.2)" title="Vùng dao động hẹp: ${pNeutral}%"></div>
-          <div style="width:${pLoss}%; background:var(--down); transition:width 0.3s" title="Xác suất đáy lỗ ≥ 7%: ${pLoss}%"></div>
-        </div>
-        <div style="display:flex; justify-content:space-between; font-size:11px; margin-top:4px; color:var(--muted)">
-          <span style="color:var(--up)">▲ Lãi ≥ 5%: <b>${pGain}%</b></span>
-          <span>Dao động hẹp: <b>${pNeutral}%</b></span>
-          <span style="color:var(--down)">▼ Lỗ ≥ 7%: <b>${pLoss}%</b></span>
-        </div>
-      </div>
-
-      <div class="small muted" style="margin-top:6px; display:flex; gap:16px; flex-wrap:wrap; border-top:1px dashed var(--border); padding-top:6px">
-        <span>Xác suất tăng: <b>${Math.round(mc.probUp * 100)}%</b></span>
-        <span>Kỳ vọng đỉnh: <b class="up">+${mc.peakGainMedian}%</b></span>
-        <span>Kỳ vọng đáy: <b class="down">${mc.troughDdMedian}%</b></span>
-        <span>Lợi suất trung vị: <b>${mc.finalRetMedian > 0 ? '+' : ''}${mc.finalRetMedian}%</b></span>
+    html += `<div class="bf-ai ${pLoss >= 40 ? 'down' : 'ref'}" style="margin-top:10px; border-radius:8px; padding:10px 14px; background:var(--surface-2); border:1px solid var(--border-light)">
+      <div style="font-size:13px"><b>🎲 Rủi ro 20 phiên</b> <span class="muted small">(mô phỏng theo biến động thực tế của mã, không dự báo hướng)</span></div>
+      <div class="small" style="margin-top:6px; display:flex; gap:16px; flex-wrap:wrap">
+        <span>Có lúc lỗ ≥ 7%: <b class="${pLoss >= 40 ? 'down' : ''}">${pLoss}%</b></span>
+        <span>Mức sụt trung vị: <b class="down">${pct(mc.troughDdMedian / 100)}</b></span>
+        <span>80% kết quả sau 20 phiên: ${pct(mc.finalRetP10 / 100)} … ${pct(mc.finalRetP90 / 100)}</span>
       </div>
     </div>`;
   }
@@ -2831,13 +2831,23 @@ function renderBrief(a) {
     <tbody>${stepRows(steps, { close: a.price.close })}</tbody></table>`;
   el.className = `card brief-card tone-${eff.tone}`;
 
-  const entry = a.plan?.entryZone || (l?.s1 ? { from: l.s1, to: a.price.close } : null);
-  const stop = l?.stop || a.plan?.stopLoss;
+  const close = a.price.close;
+  // Chỉ hiện vùng mua / tỷ trọng như lời khuyên mua khi quyết định (cuối cùng nếu có) là mua
+  const code = eff.fin?.code ?? b.code;
+  const buying = code === 'BUY' || code === 'ACCUMULATE';
+  const entry = l?.buyFrom != null ? { from: l.buyFrom, to: l.buyTo } : a.plan?.entryZone || (l?.s1 ? { from: l.s1, to: close } : null);
+  const stop = l?.holdStop ?? l?.stop ?? a.plan?.stopLoss;
   const chandelier = a.plan?.trailing?.chandelierStop;
-  const target = l?.r1 || a.plan?.target;
-  const inZone = entry && a.price.close >= entry.from && a.price.close <= entry.to;
-  const rr = l?.riskReward || (stop && target && a.price.close > stop ? (target - a.price.close) / (a.price.close - stop) : null);
-  const weightStr = l?.weight != null ? `${Math.round(l.weight * 100)}% vốn` : '15–20% vốn';
+  // Mục tiêu giống phần tóm tắt: kháng cự 1, hoặc kháng cự 2 nếu kháng cự 1 cách giá dưới 1 ATR
+  const target = l?.target ?? l?.r1 ?? a.plan?.target;
+  const inZone = entry && close >= entry.from && close <= entry.to;
+  const rr = l?.riskReward ?? (stop && target && close > stop ? (target - close) / (close - stop) : null);
+  const reward = target ? target / close - 1 : null;
+  const nearTarget = reward != null && reward < 0.04; // như rewardCheck của bản tin: lời kỳ vọng < 4% không đáng mua mới
+  const wait = st?.fresh?.find((x) => x.side === 'wait')?.condition;
+  const weightStr = !buying ? 'Không mua mới' : l?.weight === 0 ? '0% vốn' : l?.weight != null ? `${Math.round(l.weight * (code === 'ACCUMULATE' ? 50 : 100))}% vốn` : '–';
+  const weightSub = !buying ? 'Chỉ áp dụng khi có tín hiệu mua'
+    : l?.sizing ? `Rủi ro 1% vốn, lỗ dự kiến ${fmtPct(l.sizing.effectiveLoss)} khi chạm cắt lỗ${l.sizing.capitalKnown ? '' : ' · chưa đặt ACCOUNT_CAPITAL'}` : 'Tối đa / mã';
 
   el.innerHTML = `
     <div class="bf-top">
@@ -2851,25 +2861,29 @@ function renderBrief(a) {
 
     <!-- 4 Khối thông số then chốt trực quan -->
     <div class="bf-key-metrics">
-      <div class="bf-metric-card">
+      ${buying ? `<div class="bf-metric-card">
         <span class="m-label">🎯 Vùng mua khuyến nghị</span>
         <span class="m-val">${entry ? `${fmt(entry.from)} – ${fmt(entry.to)}` : '–'}</span>
-        <span class="m-sub ${inZone ? 'up' : ''}">${inZone ? '● Đang trong vùng mua' : entry && a.price.close > entry.to ? `Chờ chỉnh (${signed(((entry.to - a.price.close) / a.price.close) * 100, 1)}%)` : 'Chờ tích lũy'}</span>
-      </div>
+        <span class="m-sub ${inZone ? 'up' : ''}">${inZone ? '● Đang trong vùng mua' : entry && close > entry.to ? `Chờ chỉnh (${signed(((entry.to - close) / close) * 100, 1)}%)` : 'Chờ tích lũy'}</span>
+      </div>` : `<div class="bf-metric-card">
+        <span class="m-label">⏸ Chưa mua mới</span>
+        <span class="m-val">Chờ điều kiện</span>
+        <span class="m-sub">${esc(wait || 'Chờ tín hiệu mua rõ hơn')}</span>
+      </div>`}
       <div class="bf-metric-card down">
-        <span class="m-label">🛡️ Cắt lỗ &amp; Chandelier</span>
+        <span class="m-label">🛡️ ${l?.holdStop != null ? 'Cắt lỗ (từ ngày mua)' : 'Cắt lỗ'}</span>
         <span class="m-val">${fmt(stop)}</span>
-        <span class="m-sub">${chandelier ? `Chandelier Exit: ${fmt(chandelier)}` : stop ? `${pct((stop - a.price.close) / a.price.close)}` : 'Ngưỡng vi phạm'}</span>
+        <span class="m-sub">${stop ? `${pct((stop - close) / close)} · bán nếu đóng cửa dưới` : 'Ngưỡng vi phạm'}${chandelier ? ` · Chandelier ${fmt(chandelier)}` : ''}</span>
       </div>
-      <div class="bf-metric-card up">
+      <div class="bf-metric-card ${nearTarget ? '' : 'up'}">
         <span class="m-label">🚀 Mục tiêu chốt lời</span>
         <span class="m-val">${fmt(target)}</span>
-        <span class="m-sub">${target ? `${pct((target - a.price.close) / a.price.close)}${rr ? ` · R/R ${fmt(rr, 1)}x` : ''}` : 'Kỳ vọng'}</span>
+        <span class="m-sub">${target ? `${pct(reward)}${rr ? ` · R/R ${fmt(rr, 1)}x` : ''}` : 'Kỳ vọng'}${nearTarget ? ' · <b class="down">mục tiêu gần (&lt; 4%), không đáng mua mới</b>' : ''}</span>
       </div>
       <div class="bf-metric-card accent">
         <span class="m-label">💼 Tỷ trọng đề xuất</span>
         <span class="m-val">${weightStr}</span>
-        <span class="m-sub">Tối đa / mã</span>
+        <span class="m-sub">${esc(weightSub)}</span>
       </div>
     </div>
 
