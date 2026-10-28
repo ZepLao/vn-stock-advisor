@@ -217,14 +217,16 @@ const routes = [
   ['POST', /^\/api\/selfreview\/run$/, async (req, res) => send(res, 200, await runSelfReview({ apply: false }))],
   // Đồng bộ database ngay
   ['POST', /^\/api\/db\/sync$/, async (req, res) => send(res, 200, await syncAll())],
-  // Bản tin Telegram: xem trước (GET) hoặc gửi ngay (POST), ?kind=open|close
+  // Bản tin Telegram: xem trước (GET) hoặc gửi ngay (POST), ?kind=close|morning|weekly
   ['GET', /^\/api\/telegram\/preview$/, async (req, res) => {
-    const kind = new URL(req.url, 'http://localhost').searchParams.get('kind') === 'open' ? 'open' : 'close';
+    const k = new URL(req.url, 'http://localhost').searchParams.get('kind');
+    const kind = ['morning', 'weekly'].includes(k) ? k : 'close';
     send(res, 200, { kind, ...(await buildReport(kind)) });
   }],
   ['POST', /^\/api\/telegram\/send$/, async (req, res) => {
     if (!telegramConfig().enabled) return send(res, 400, { error: 'Chưa cấu hình TELEGRAM_BOT_TOKEN và TELEGRAM_CHAT_ID trong .env' });
-    const kind = new URL(req.url, 'http://localhost').searchParams.get('kind') === 'open' ? 'open' : 'close';
+    const k = new URL(req.url, 'http://localhost').searchParams.get('kind');
+    const kind = ['morning', 'weekly'].includes(k) ? k : 'close';
     send(res, 200, await sendReport(kind));
   }],
   ['POST', /^\/api\/alerts\/test$/, async (req, res) => {
@@ -285,7 +287,7 @@ server.listen(PORT, process.env.HOST || '127.0.0.1', () => {
   startSelfReview(telegramConfig().enabled ? sendMessage : null);
   // Bản tin Telegram sau ATO và sau đóng cửa mỗi ngày giao dịch
   console.log(startTelegramSchedule()
-    ? 'Telegram: BẬT — bản tin ~9:20 và ~15:10 các ngày giao dịch, kèm cảnh báo trong phiên'
+    ? 'Telegram: BẬT — lệnh cho phiên tới 15:10, nhắc lệnh 8:30 (khi có lệnh), tổng kết tuần thứ 6, cảnh báo khẩn mã đang giữ'
     : 'Telegram: TẮT (thêm TELEGRAM_BOT_TOKEN và TELEGRAM_CHAT_ID vào .env, xem `npm run telegram`)');
   // Trong phiên: chụp giá toàn rổ + thị trường vào database; sau 15:45: chẩn đoán lại các dự đoán
   if (startIntraday()) {
@@ -298,9 +300,9 @@ server.listen(PORT, process.env.HOST || '127.0.0.1', () => {
   if (startTelegramBot()) console.log('Bot Telegram: BẬT — nhắn "mua/bán MÃ SỐ_LƯỢNG GIÁ [NGÀY]" để ghi danh mục, "danh mục", "hoàn tác"');
   // Quét toàn bộ rổ trong phiên, báo ngay mã nhóm dẫn đầu vừa vào vùng mua (đã qua AI)
   startRadar();
-  console.log(`Radar cơ hội mua: BẬT — quét toàn rổ mỗi ${RADAR.minutes} phút (9:30–14:30), tối đa ${RADAR.maxDaily} tin/ngày`);
+  console.log(`Radar cơ hội mua: BẬT — quét toàn rổ mỗi ${RADAR.minutes} phút (9:30–14:30), lưu trong app${process.env.RADAR_TELEGRAM === '1' ? `, gửi Telegram tối đa ${RADAR.maxDaily} tin/ngày` : ' (Telegram tắt, bật bằng RADAR_TELEGRAM=1)'}`);
   // Mã đang nắm giữ: báo ngay khi thủng / sát cắt lỗ, chạm chốt lời, giảm hoặc tăng mạnh trong phiên
-  if (startHoldWatch()) console.log(`Theo dõi danh mục: BẬT — mỗi ${HOLD_RULES.minutes} phút (9:15–14:50): cắt lỗ, chốt lời, giảm ≥ 3%/5%/sàn, tăng ≥ 4%/trần`);
+  if (startHoldWatch()) console.log(`Theo dõi danh mục: BẬT — mỗi ${HOLD_RULES.minutes} phút (9:15–14:50): dưới ngưỡng −15%, sát sàn, rủi ro rơi tự do; tối đa ${HOLD_RULES.maxDaily} tin/ngày`);
   // Tải trước bảng top cổ phiếu HOSE để lần mở trang đầu không phải chờ
   getMarketMovers('HOSE').catch(() => {});
   // Tính bảng xếp hạng ngay và mỗi 30 phút (đồng thời ghi top 8 vào nhật ký dự đoán)

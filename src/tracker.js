@@ -47,7 +47,10 @@ function save() {
   return saving;
 }
 
-function addAlert(symbol, type, message, { forward = true } = {}) {
+// Gửi ngay qua Telegram chỉ ngưỡng giá do người dùng đặt (và tin thử). Đổi khuyến nghị / AI đổi ý được phản ánh trong
+// bản tin 15:10 nên không gửi riêng, tránh nhiễu trong phiên.
+const FORWARD_TYPES = new Set(['price', 'test']);
+function addAlert(symbol, type, message, { forward = FORWARD_TYPES.has(type) } = {}) {
   state.alerts.unshift({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, time: new Date().toISOString(), symbol, type, message, read: false });
   state.alerts.length = Math.min(state.alerts.length, MAX_ALERTS);
   console.log(`[Cảnh báo] ${symbol}: ${message}`);

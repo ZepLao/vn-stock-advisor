@@ -21,6 +21,10 @@ const DATA = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const FILE = join(DATA, 'radar.json');
 const BUY_CODES = ['BUY', 'ACCUMULATE'];
 
+// Gửi Telegram trong phiên chỉ khi RADAR_TELEGRAM=1: quy tắc mua quyết định sau giờ đóng cửa (bản tin 15:10), gợi ý
+// giữa phiên dễ dẫn tới mua đuổi. Radar vẫn quét và lưu cơ hội trong app.
+const RADAR_TELEGRAM = process.env.RADAR_TELEGRAM === '1';
+
 export const RADAR = {
   minutes: Number(process.env.RADAR_MINUTES) || 15,
   maxDaily: Number(process.env.RADAR_MAX_DAILY) || 5, // số tin cơ hội tối đa mỗi ngày (chống spam)
@@ -167,7 +171,7 @@ export async function radarTick({ force = false } = {}) {
       if (ha?.stockRisk?.isRisky) {
         (st.riskAlerted ??= {})[h.symbol] = today;
         const alertText = radarRiskMessage(ha, h);
-        if (!force && telegramConfig().enabled) {
+        if (!force && RADAR_TELEGRAM && telegramConfig().enabled) {
           await sendMessage(alertText).catch((err) => console.error('[Radar] Lỗi gửi cảnh báo rủi ro:', err.message));
         }
         await tracker.pushAlert(h.symbol, 'risk', `Cảnh báo rủi ro cao: ${ha.stockRisk.reasons.join(' · ')}`);
@@ -212,7 +216,7 @@ export async function radarTick({ force = false } = {}) {
       st.sent.push(sym);
       found.push(force ? { symbol: sym, text } : sym);
       if (force) continue;
-      if (telegramConfig().enabled) await sendMessage(text).catch((err) => console.error('[Radar] Lỗi gửi Telegram:', err.message));
+      if (RADAR_TELEGRAM && telegramConfig().enabled) await sendMessage(text).catch((err) => console.error('[Radar] Lỗi gửi Telegram:', err.message));
       await tracker.pushAlert(sym, 'opportunity', `Cơ hội mua: giá ${a.price.close} trong vùng mua, xếp hạng ${rank.score}${ok ? ', AI đồng ý' : ', AI chưa đồng ý'}`);
       console.log(`[Radar] Báo cơ hội mua ${sym} @ ${a.price.close}`);
     }

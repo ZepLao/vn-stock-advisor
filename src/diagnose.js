@@ -195,8 +195,8 @@ export function startDiagnose(notify = null) {
       if (bars.at(-1)?.time !== today || prev?.date === today) return;
       const d = await runDiagnosis();
       console.log(`[Chẩn đoán] ${today}: ${d.suggestions.length} đề xuất`);
-      // Báo khi xuất hiện loại đề xuất mới so với hôm trước, và tổng kết mỗi thứ 6
-      if (notify && ((d.suggestions.length && areas(d) !== areas(prev)) || vn.getUTCDay() === 5)) await notify(formatDiagnosis(d));
+      // Chỉ báo khi xuất hiện loại đề xuất mới so với hôm trước (tổng kết tuần nằm trong bản tin tổng kết tuần của telegram.js)
+      if (notify && d.suggestions.length && areas(d) !== areas(prev)) await notify(formatDiagnosis(d));
     } catch (err) {
       console.error('[Chẩn đoán] Lỗi:', err.message);
     }

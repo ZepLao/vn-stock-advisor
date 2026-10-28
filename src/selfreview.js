@@ -309,7 +309,8 @@ export function startSelfReview(notify = null) {
       if (bars.at(-1)?.time !== today || (await lastReview())?.date === today) return;
       const rv = await runSelfReview();
       console.log(`[Tự đánh giá] ${today}: ${rv.picks.n} lệnh đã xong, ${rv.changes.filter((c) => !c.skipped).length} thay đổi`);
-      if (notify && (rv.changes.some((c) => !c.skipped) || vn.getUTCDay() === 5)) await notify(formatReview(rv));
+      // Chỉ báo khi thật sự đổi thông số; tổng kết tuần gộp trong telegram.js
+      if (notify && rv.changes.some((c) => !c.skipped)) await notify(formatReview(rv));
     } catch (err) {
       console.error('[Tự đánh giá] Lỗi:', err.message);
     }
