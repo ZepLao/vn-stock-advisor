@@ -24,7 +24,8 @@ test('Tỷ trọng theo rủi ro 1% vốn, tối đa 25%', () => {
 test('Tóm tắt: kết luận, việc nên làm (một suất, LO giá đóng cửa, cảnh báo −15%), lý do có số liệu', () => {
   const b = buildBrief(base(), { name: 'Ngân hàng', net: 8e12, rank: 1, total: 27, period: 5 });
   assert.equal(b.verdict, 'NÊN MUA');
-  assert.match(b.action, /một suất \(10% vốn\) bằng lệnh LO giá 20; giữ khoảng 40 phiên, cảnh báo nếu đóng cửa dưới 17/);
+  // Chưa biết vốn: mặc định 7 suất (sizing.js SLOT_TIERS) → một suất ≈ 14% vốn
+  assert.match(b.action, /một suất \(14% vốn\) bằng lệnh LO giá 20; giữ khoảng 40 phiên, cảnh báo nếu đóng cửa dưới 17/);
   assert.ok(b.reasons.length >= 4 && b.reasons.length <= 6);
   assert.ok(b.reasons.some((r) => /Ngân hàng được mua ròng 8\.000 tỷ\/5 phiên \(top hút tiền\)/.test(r.text)));
   assert.ok(b.reasons.some((r) => /Khối ngoại mua ròng 50 tỷ/.test(r.text)));

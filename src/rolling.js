@@ -150,33 +150,43 @@ export function simulateRolling(cal, data, o) {
   return { equity, trades, blocked, fees, stats, positions: [...pos.keys()] };
 }
 
-/** Chạy trên dữ liệu thật (rổ theo thời điểm), kèm đối chứng danh mục mẫu hiện tại. */
+/**
+ * Dữ liệu cho mô phỏng (rổ theo thời điểm, giá các mã, ngành theo phân loại hiện tại). Dùng chung cho runRollingPortfolio
+ * và các nghiên cứu chạy nhiều biến thể trên cùng dữ liệu.
+ */
+export async function loadRollingData({ years = 3, step = ROLLING_RULES.step } = {}) {
+  const c = screenCriteria();
+  const days = Math.round((years + 1.3) * 365);
+  const cal = (await getPriceHistory('VNINDEX', days)).bars;
+  const start = Math.max(260, cal.length - Math.round(years * 252));
+  const snapDates = [];
+  for (let t = start; t < cal.length; t += step) snapDates.push(cal[t].time);
+  const pit = await pointInTimeUniverse(snapDates);
+  const exOf = new Map();
+  for (const d of snapDates) for (const u of pit.byDate.get(d) || []) exOf.set(u.symbol, u.exchange);
+  const syms = [...exOf.keys()];
+  const all = await poolMap(syms, (s) => getPriceHistory(s, days));
+  const data = {};
+  syms.forEach((s, k) => {
+    const bars = all[k]?.bars;
+    if (bars?.length) data[s] = { bars, at: new Map(bars.map((b, i) => [b.time, i])), read: factorReader(bars), ex: BANDS[exOf.get(s)] ? exOf.get(s) : 'HOSE' };
+  });
+  // Ngành theo phân loại hiện tại (không có lịch sử phân ngành; mã không còn trong bảng ngành = "Khác")
+  const flows = await getSectorFlows(5).catch(() => null);
+  const sec = new Map();
+  for (const s of flows?.sectors || []) for (const x of s.stocks) sec.set(x.symbol, s.name);
+  return { cal, data, start, minValue: c.minValue, members: (date) => new Set((pit.byDate.get(date) || []).map((u) => u.symbol)), sectorOf: (s) => sec.get(s) || 'Khác' };
+}
+
+/** Chạy trên dữ liệu thật (rổ theo thời điểm). */
 export async function runRollingPortfolio(opts = {}) {
   const years = Math.min(4, Math.max(1, Number(opts.years) || 3));
   const R = { ...ROLLING_RULES, ...Object.fromEntries(Object.entries(opts).filter(([k]) => k in ROLLING_RULES)) };
   const initialCash = Number(opts.initialCash) > 0 ? Number(opts.initialCash) : DEFAULTS.initialCash;
   const c = screenCriteria();
   return cached(`rolling:${years}:${JSON.stringify(R)}:${initialCash}:${c.floors}:${c.minValue}`, 30 * 60_000, async () => {
-    const days = Math.round((years + 1.3) * 365);
-    const cal = (await getPriceHistory('VNINDEX', days)).bars;
-    const start = Math.max(260, cal.length - Math.round(years * 252));
-    const snapDates = [];
-    for (let t = start; t < cal.length; t += R.step) snapDates.push(cal[t].time);
-    const pit = await pointInTimeUniverse(snapDates);
-    const exOf = new Map();
-    for (const d of snapDates) for (const u of pit.byDate.get(d) || []) exOf.set(u.symbol, u.exchange);
-    const syms = [...exOf.keys()];
-    const all = await poolMap(syms, (s) => getPriceHistory(s, days));
-    const data = {};
-    syms.forEach((s, k) => {
-      const bars = all[k]?.bars;
-      if (bars?.length) data[s] = { bars, at: new Map(bars.map((b, i) => [b.time, i])), read: factorReader(bars), ex: BANDS[exOf.get(s)] ? exOf.get(s) : 'HOSE' };
-    });
-    // Ngành theo phân loại hiện tại (không có lịch sử phân ngành; mã không còn trong bảng ngành = "Khác")
-    const flows = await getSectorFlows(5).catch(() => null);
-    const sec = new Map();
-    for (const s of flows?.sectors || []) for (const x of s.stocks) sec.set(x.symbol, s.name);
-    const sim = simulateRolling(cal, data, { ...R, start, minValue: c.minValue, initialCash, members: (date) => new Set((pit.byDate.get(date) || []).map((u) => u.symbol)), sectorOf: (s) => sec.get(s) || 'Khác' });
+    const d = await loadRollingData({ years, step: R.step });
+    const sim = simulateRolling(d.cal, d.data, { ...R, ...d, initialCash });
     const values = sim.equity.map((e) => e.value);
     const metrics = calcMetrics(values, sim.trades, initialCash, sim.equity.map((e) => e.index));
     return {

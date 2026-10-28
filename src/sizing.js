@@ -99,11 +99,50 @@ export function accountCapital() {
  * @param {{ value20?: number, capital?: number|null, sector?: { name: string, count: number }|null }} ctx
  */
 export const SLOT_RULES = { slots: 10, perSector: 3, maxAdv: SIZING.maxAdv };
-export function slotSize({ value20 = null, capital = null, sector = null } = {}, R = SLOT_RULES) {
+export function slotSize({ value20 = null, capital = null, sector = null, slots = null } = {}, R = SLOT_RULES) {
   const p = (v) => `${(Math.round(v * 1000) / 10).toLocaleString('vi-VN')}%`;
-  const limits = [{ key: 'slot', weight: 1 / R.slots, text: `1 suất = ${p(1 / R.slots)} vốn (tối đa ${R.slots} mã)` }];
+  const n = slots ?? R.slots;
+  if (n === 0) return { weight: 0, binding: 'capital', slots: 0, limits: [{ key: 'capital', weight: 0, text: 'vốn chọn mã dưới 20 triệu: một suất không đủ lô 100 cp, nên mua ETF' }] };
+  const limits = [{ key: 'slot', weight: 1 / n, text: `1 suất = ${p(1 / n)} vốn chọn mã (tối đa ${n} mã)` }];
   if (capital > 0 && value20 > 0) limits.push({ key: 'liquidity', weight: (R.maxAdv * value20) / capital, text: `thanh khoản: ≤ ${p(R.maxAdv)} giá trị khớp TB20 phiên` });
   if (sector && sector.count >= R.perSector) limits.push({ key: 'sectorCount', weight: 0, text: `đã giữ ${sector.count} mã ngành ${sector.name} (tối đa ${R.perSector})` });
   const bind = limits.reduce((m, x) => (x.weight < m.weight ? x : m));
-  return { weight: Math.max(0, Math.round(bind.weight * 1000) / 1000), binding: bind.key, limits: limits.map((x) => ({ ...x, weight: r4(x.weight) })) };
+  return { weight: Math.max(0, Math.round(bind.weight * 1000) / 1000), binding: bind.key, slots: n, limits: limits.map((x) => ({ ...x, weight: r4(x.weight) })) };
+}
+
+/**
+ * Số suất theo vốn PHẦN CHỌN MÃ (vốn trừ lõi ETF). Nghiên cứu 10/2026 trên danh mục cuốn chiếu, rổ theo thời điểm, lô 100,
+ * Sharpe trung bình 3 và 4 năm (quy tắc chọn đăng ký trước: Sharpe cao nhất, chênh < 0,05 thì sụt nhỏ hơn):
+ *  - ≥ 50 triệu: 7 suất (50 tr 1,38 / 100 tr 1,25 / 300 tr 1,34 / 1 tỷ 1,35, đều hơn 10 suất 0,99–1,29; 5 suất không ổn định);
+ *  - 20–50 triệu: 10 suất (ngang 7 suất, sụt −9% so với −16% vì suất không đủ một lô thì để tiền mặt);
+ *  - dưới 20 triệu: 0 = chưa nên chọn mã (một suất không đủ lô 100 cp của phần lớn mã; chưa kiểm chứng) → mua ETF.
+ */
+export const SLOT_TIERS = [{ min: 50e6, slots: 7 }, { min: 20e6, slots: 10 }, { min: 0, slots: 0 }];
+export function slotsForCapital(capital) {
+  if (!(capital > 0)) return 7;
+  return SLOT_TIERS.find((t) => capital >= t.min).slots;
+}
+
+/**
+ * Lõi ETF tùy chọn (CORE_ETF, CORE_PCT trong .env). Nghiên cứu: 50% E1VFVN30 + 50% danh mục quy tắc, cân lại khi lệch > 10
+ * điểm %, Sharpe 1,36 / 1,14 (3 / 4 năm) ngang 100% chọn mã (1,35 / 1,14) nhưng sụt tối đa −14,8% / −15,2% thay vì
+ * −17,7% / −17,3%; FUEVFVND kém hơn rõ. Mặc định tắt (CORE_PCT = 0).
+ */
+export const CORE_RULES = { drift: 0.1, suggest: { symbol: 'E1VFVN30', pct: 0.5 } };
+export function coreConfig() {
+  const symbol = (process.env.CORE_ETF || '').trim().toUpperCase() || null;
+  const pct = Math.min(0.9, Math.max(0, Number(process.env.CORE_PCT) || 0));
+  return symbol && pct > 0 ? { symbol, pct } : { symbol: null, pct: 0 };
+}
+
+/**
+ * Lệnh cho lõi ETF (hàm thuần): mua khi chưa có, cân lại khi tỷ trọng lệch quá CORE_RULES.drift so với mục tiêu.
+ * @returns {{ side: 'buy'|'sell'|'hold', shares: number, value: number, weight: number|null, target: number }}
+ */
+export function coreOrder({ pct, capital, price, qty = 0 }) {
+  const target = capital * pct, cur = qty * price * 1000;
+  const weight = capital > 0 ? cur / capital : null;
+  const off = weight == null || (qty === 0 && pct > 0) || Math.abs(weight - pct) > CORE_RULES.drift;
+  const shares = off && price > 0 ? Math.round((target - cur) / (price * 1000) / 100) * 100 : 0;
+  return { side: shares > 0 ? 'buy' : shares < 0 ? 'sell' : 'hold', shares: Math.abs(shares), value: Math.abs(shares) * price * 1000, weight, target };
 }

@@ -2,7 +2,7 @@
 // Dựng hoàn toàn từ dữ liệu đã tính (không cần AI) để đọc lướt là hiểu.
 import { priceLevels, tradeSteps, HOLD_RULE, tick } from './tradeplan.js';
 import { getTuning } from './tuning.js';
-import { positionSize, slotSize } from './sizing.js';
+import { positionSize, slotSize, slotsForCapital, coreConfig } from './sizing.js';
 
 export { positionSize };
 
@@ -143,7 +143,9 @@ export function buildBrief(a, sector = null, holding = null, bars = null, risk =
   // Cắt lỗ theo hỗ trợ cũ giữ ở supportStop để tham khảo.
   const wide = (p) => Math.round(Math.floor((p * (1 - HOLD_RULE.wideStop)) / tick(p) + 1e-9) * tick(p) * 100) / 100;
   if (L) { L.supportStop = L.stop; L.stop = wide(close); }
-  const size = L ? slotSize({ value20: a.value20, capital: risk?.capital ?? null, sector: risk?.sector ?? null }) : null;
+  // Vốn phần chọn mã = vốn tài khoản trừ lõi ETF (nếu bật); số suất theo vốn đó (sizing.js SLOT_TIERS)
+  const satCapital = risk?.capital > 0 ? risk.capital * (1 - coreConfig().pct) : null;
+  const size = L ? slotSize({ value20: a.value20, capital: satCapital, sector: risk?.sector ?? null, slots: slotsForCapital(satCapital) }) : null;
   const holdStop = holding?.avgCost ? wide(holding.avgCost) : null;
   const heldSessions = holding?.openedAt && bars?.length ? Math.max(0, bars.filter((b) => b.time > holding.openedAt).length) : null;
   const steps = L ? tradeSteps(a.recommendation.code, L, {
@@ -163,7 +165,7 @@ export function buildBrief(a, sector = null, holding = null, bars = null, risk =
     })(),
     weight: size?.weight ?? null,
     holdStop, heldSessions, holdSessions: HOLD_RULE.sessions,
-    sizing: size ? { binding: size.binding, limits: size.limits, capitalKnown: risk?.capital > 0 } : null,
+    sizing: size ? { binding: size.binding, limits: size.limits, slots: size.slots, capitalKnown: risk?.capital > 0 } : null,
   } : null;
   const fmtLv = {
     size: size ? `${Math.round(size.weight * 100)}%` : '10%', half: size ? `${Math.max(1, Math.round(size.weight * 50))}%` : '5%',

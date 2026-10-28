@@ -2847,7 +2847,7 @@ function renderBrief(a) {
   const wait = st?.fresh?.find((x) => x.side === 'wait')?.condition;
   const weightStr = !buying ? 'Không mua mới' : l?.weight === 0 ? '0% vốn' : l?.weight != null ? `${Math.round(l.weight * (code === 'ACCUMULATE' ? 50 : 100))}% vốn` : '–';
   const weightSub = !buying ? 'Chỉ áp dụng khi có tín hiệu mua'
-    : `1 suất · tối đa 10 mã, 3 mã/ngành${l?.sizing && !l.sizing.capitalKnown ? ' · đặt ACCOUNT_CAPITAL để chặn theo thanh khoản' : ''}`;
+    : `1 suất · tối đa ${l?.sizing?.slots ?? 7} mã, 3 mã/ngành${l?.sizing && !l.sizing.capitalKnown ? ' · đặt ACCOUNT_CAPITAL để tính theo vốn' : ''}`;
 
   el.innerHTML = `
     <div class="bf-top">

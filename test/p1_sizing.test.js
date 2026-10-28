@@ -84,3 +84,33 @@ test('sanitizePriority: tối đa 3 mã một ngành, mã trần tỷ trọng 0 
   assert.notEqual(by.HPG.tier, 'CHUA_MUA');
   assert.equal(by.FPT.tier, 'CHUA_MUA');
 });
+
+test('Số suất theo vốn phần chọn mã và lệnh lõi ETF', async () => {
+  const { slotsForCapital, slotSize, coreOrder } = await import('../src/sizing.js');
+  assert.equal(slotsForCapital(5e6), 0); // dưới 20 triệu: nên mua ETF
+  assert.equal(slotsForCapital(30e6), 10);
+  assert.equal(slotsForCapital(5e8), 7);
+  assert.equal(slotsForCapital(null), 7); // chưa biết vốn
+  assert.equal(slotSize({ slots: 0 }).weight, 0);
+  assert.match(slotSize({ slots: 0 }).limits[0].text, /nên mua ETF/);
+  assert.equal(slotSize({ slots: 7 }).weight, 0.143);
+  // Lõi 50% của 100 triệu, ETF giá 34: chưa có → mua 1.500 ccq; đang 51% → giữ; lệch quá 10 điểm → cân lại
+  assert.deepEqual(coreOrder({ pct: 0.5, capital: 1e8, price: 34, qty: 0 }).side, 'buy');
+  assert.equal(coreOrder({ pct: 0.5, capital: 1e8, price: 34, qty: 0 }).shares, 1500);
+  assert.equal(coreOrder({ pct: 0.5, capital: 1e8, price: 34, qty: 1500 }).side, 'hold');
+  const over = coreOrder({ pct: 0.5, capital: 1e8, price: 34, qty: 2000 }); // 68%
+  assert.equal(over.side, 'sell');
+  assert.equal(over.shares, 500);
+});
+
+test('Bản tin: lõi ETF và vốn quá nhỏ để chọn mã', async () => {
+  const { planOrders, formatCloseReport } = await import('../src/telegram.js');
+  const plan = planOrders({ held: [], candidates: [], capital: 1e7, slots: 0 });
+  plan.core = null;
+  const t = formatCloseReport({ date: '2026-10-28', market: null, regime: null, plan, core: { symbol: 'E1VFVN30', pct: 0.5, price: 34, order: { side: 'buy', shares: 100, value: 3.4e6, weight: 0 } } });
+  assert.match(t, /LÕI ETF E1VFVN30<\/b> 50% vốn: <b>mua 100<\/b> ccq LO 34/);
+  assert.match(t, /vốn chọn mã dưới 20 triệu.*nên mua ETF/);
+  const p7 = planOrders({ held: [], candidates: [], capital: 7e8, slots: 7 });
+  assert.equal(p7.freeSlots, 7);
+  assert.match(formatCloseReport({ date: '2026-10-28', market: null, regime: null, plan: p7 }), /còn 7 suất trống · 1 suất ≈ 100 tr/);
+});

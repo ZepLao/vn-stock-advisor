@@ -13,7 +13,7 @@ import { recordTrades } from './selfreview.js';
 import { getSectorFlows } from './sectors.js';
 import { sectorMap, junkCheck } from './picks.js';
 import { HOLD_RULE } from './tradeplan.js';
-import { SLOT_RULES, accountCapital } from './sizing.js';
+import { SLOT_RULES, accountCapital, slotsForCapital, coreConfig, coreOrder, CORE_RULES } from './sizing.js';
 
 const FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'telegram.json');
 const MAX_LEN = 4000; // Telegram giới hạn 4096 ký tự / tin
@@ -276,13 +276,14 @@ export function planOrders({ held, candidates, capital = null, buyCount = 5, slo
     });
     if (sec) perSec.set(sec, (perSec.get(sec) || 0) + 1);
   }
-  return { sells, review, keep, buys, freeSlots, slotValue };
+  return { sells, review, keep, buys, freeSlots, slotValue, slots };
 }
 
 const REGIME_LABEL = { CONFIRMED_UPTREND: '🟢 tăng', UPTREND_UNDER_PRESSURE: '🟡 tăng có áp lực', MARKET_CORRECTION: '🔴 điều chỉnh', UNKNOWN: '⚪ chưa xác định (không mua mới)' };
 
 /** Bản tin sau phiên (hàm thuần). */
-export function formatCloseReport({ date, market, regime, plan, summary = null, expectation = null, notes = [] }) {
+export function formatCloseReport({ date, market, regime, plan, summary = null, expectation = null, notes = [], core = null }) {
+  const slots = plan.slots ?? SLOT_RULES.slots;
   const N = HOLD_RULE.sessions, D = '━━━━━━━━━━━━━━━━━━━━';
   const L = [`🏁 <b>LỆNH CHO PHIÊN TỚI · sau phiên ${ddmm(date)}</b>`, marketLine(market)];
   if (regime) L.push(`🧭 Thị trường: ${REGIME_LABEL[regime.regime] || esc(regime.label)}${regime.regime === 'UNKNOWN' ? '' : ' <i>(chỉ tham khảo, quy tắc không đổi)</i>'}`);
@@ -294,14 +295,23 @@ export function formatCloseReport({ date, market, regime, plan, summary = null, 
     L.push(`▸ <b>${esc(s.symbol)}</b> LO ${num(s.close)}${q} · ${esc(s.reason)}`);
   }
 
-  const slotTxt = plan.slotValue != null ? ` · 1 suất ≈ ${num(plan.slotValue / 1e6, 0)} tr` : ' · 1 suất = 10% vốn';
+  if (core) {
+    const o = core.order;
+    const what = o.side === 'hold' ? `giữ (đang ${num((o.weight ?? 0) * 100, 0)}%)` : `<b>${o.side === 'buy' ? 'mua' : 'bán'} ${num(o.shares, 0)}</b> ccq LO ${num(core.price)} ≈ ${num(o.value / 1e6, 0)} tr`;
+    L.push('', `🧺 <b>LÕI ETF ${esc(core.symbol)}</b> ${Math.round(core.pct * 100)}% vốn: ${what}`);
+  }
+  if (slots === 0) {
+    L.push('', '🟢 <b>MUA</b>: <i>vốn chọn mã dưới 20 triệu, một suất không đủ lô 100 cp: nên mua ETF (vd E1VFVN30) thay vì chọn mã.</i>');
+  } else {
+  const slotTxt = plan.slotValue != null ? ` · 1 suất ≈ ${num(plan.slotValue / 1e6, 0)} tr` : ` · 1 suất = ${Math.round(100 / slots)}% vốn chọn mã`;
   L.push('', `🟢 <b>MUA</b>${plan.buys.length ? ` (${plan.buys.length})` : ''} · còn ${plan.freeSlots} suất trống${slotTxt}`);
-  if (!plan.buys.length) L.push(plan.freeSlots ? '<i>Không có mã mới đạt quy tắc (≥ 70 trên MA200 hoặc xu hướng chuẩn, không ⛔, ≤ 3 mã/ngành).</i>' : '<i>Danh mục đã đủ 10 mã: không mua thêm.</i>');
+  if (!plan.buys.length) L.push(plan.freeSlots ? '<i>Không có mã mới đạt quy tắc (≥ 70 trên MA200 hoặc xu hướng chuẩn, không ⛔, ≤ 3 mã/ngành).</i>' : `<i>Danh mục đã đủ ${slots} mã: không mua thêm.</i>`);
   for (const b of plan.buys) {
     const qty = b.shares === 0 ? ` · <i>${b.half ? 'nửa suất' : '1 suất'} chưa đủ 1 lô 100 cp (${num(b.price * 100 * 1000 / 1e6, 1)} tr)</i>`
       : b.shares != null ? ` · <b>${num(b.shares, 0)}</b> cp ≈ ${num(b.value / 1e6, 0)} tr` : ` · ${b.half ? 'nửa suất' : '1 suất'}`;
     const tags = [b.sector && esc(b.sector), b.score != null && `xếp hạng ${b.score}`, b.trendPick && '★ xu hướng', b.half && 'thăm dò', b.aiNo && 'AI chưa đồng ý'].filter(Boolean).join(' · ');
     L.push(`▸ <b>${esc(b.symbol)}</b> LO <b>${num(b.price)}</b>${qty}`, `${IND}${tags}${b.stop != null ? ` · cảnh báo &lt; ${num(b.stop)}` : ''}`);
+  }
   }
 
   if (plan.review.length) {
@@ -312,7 +322,7 @@ export function formatCloseReport({ date, market, regime, plan, summary = null, 
   const holding = plan.keep.length + plan.review.length + plan.sells.length;
   if (holding) {
     const perf = summary ? ` · ${summary.unrealizedPct >= 0 ? 'lãi' : 'lỗ'} <b>${sgn(summary.unrealizedPct)}</b> · hôm nay ${money(summary.dayChange)}` : '';
-    L.push('', D, `💼 <b>DANH MỤC</b> ${holding}/${SLOT_RULES.slots} mã${perf}`);
+    L.push('', D, `💼 <b>DANH MỤC</b> ${holding}/${slots} mã${perf}`);
     if (plan.keep.length) L.push(`Giữ: ${plan.keep.map((k) => `${esc(k.symbol)}${k.held != null ? ` ${k.held}/${N}` : ''}${k.pnlPct != null ? ` ${sgn(k.pnlPct * 100, 0)}` : ''}`).join(' · ')}`);
   }
 
@@ -324,8 +334,10 @@ export function formatCloseReport({ date, market, regime, plan, summary = null, 
 
 /** Nhắc lệnh trước ATO (hàm thuần); null nếu không có lệnh. */
 export function formatMorning(plan, date) {
-  if (!plan || (!plan.buys?.length && !plan.sells?.length)) return null;
+  const coreSide = plan?.core && plan.core.order.side !== 'hold';
+  if (!plan || (!plan.buys?.length && !plan.sells?.length && !coreSide)) return null;
   const L = [`⏰ <b>NHẮC LỆNH TRƯỚC ATO</b> · lập sau phiên ${ddmm(date)}`];
+  if (coreSide) L.push(`🧺 Lõi ETF: ${plan.core.order.side === 'buy' ? 'mua' : 'bán'} <b>${esc(plan.core.symbol)}</b> ${num(plan.core.order.shares, 0)} ccq`);
   if (plan.sells.length) L.push(`🔴 Bán: ${plan.sells.map((s) => `<b>${esc(s.symbol)}</b>${s.qty ? ` ${num(s.qty, 0)} cp` : ''}`).join(' · ')}`);
   if (plan.buys.length) L.push(`🟢 Mua LO: ${plan.buys.map((b) => `<b>${esc(b.symbol)}</b> ${num(b.price)}${b.shares != null ? ` × ${num(b.shares, 0)}` : ''}`).join(' · ')}`);
   L.push('<i>Giá LO = giá đóng cửa phiên trước; không khớp thì để bản tin chiều nay xét lại, không đuổi giá.</i>');
@@ -335,10 +347,10 @@ export function formatMorning(plan, date) {
 const VERDICT_TXT = { insufficient: 'chưa đủ dữ liệu', supported: '✅ ủng hộ', rejected: '❌ bác bỏ', inconclusive: 'chưa kết luận' };
 
 /** Tổng kết tuần (hàm thuần). */
-export function formatWeekly({ date, summary = null, holdings = [], hypotheses = [], tuning = [] }) {
+export function formatWeekly({ date, summary = null, holdings = [], hypotheses = [], tuning = [], slots = SLOT_RULES.slots }) {
   const L = [`📅 <b>TỔNG KẾT TUẦN · đến ${ddmm(date)}</b>`];
   if (summary) {
-    L.push('', `💼 Danh mục ${holdings.length}/${SLOT_RULES.slots} mã · giá trị ${num(summary.marketValue / 1e6, 0)} tr · ${summary.unrealizedPct >= 0 ? 'lãi' : 'lỗ'} <b>${sgn(summary.unrealizedPct)}</b> chưa chốt · đã chốt ${money(summary.realized)}`);
+    L.push('', `💼 Danh mục ${holdings.length}/${slots} mã · giá trị ${num(summary.marketValue / 1e6, 0)} tr · ${summary.unrealizedPct >= 0 ? 'lãi' : 'lỗ'} <b>${sgn(summary.unrealizedPct)}</b> chưa chốt · đã chốt ${money(summary.realized)}`);
     const secs = {};
     for (const h of holdings) if (h.sector) secs[h.sector] = (secs[h.sector] || 0) + 1;
     const crowd = Object.entries(secs).filter(([, n]) => n > SLOT_RULES.perSector);
@@ -375,7 +387,8 @@ export async function buildReport(kind = 'close') {
     const date = (await getPriceHistory('VNINDEX')).bars.at(-1).time;
     return {
       text: formatWeekly({
-        date, summary: pf?.summary, holdings: (pf?.holdings || []).map((h) => ({ ...h, sector: sectors.get(h.symbol)?.name })),
+        date, summary: pf?.summary, slots: slotsForCapital(accountCapital() != null ? accountCapital() * (1 - coreConfig().pct) : null),
+        holdings: (pf?.holdings || []).filter((h) => h.symbol !== coreConfig().symbol).map((h) => ({ ...h, sector: sectors.get(h.symbol)?.name })),
         hypotheses: v?.hypotheses || [], tuning: tuningLog().filter((x) => x.at >= weekAgo),
       }),
       unverified: [],
@@ -389,7 +402,8 @@ export async function buildReport(kind = 'close') {
     marketContext().catch(() => null), getRankBoard(), getPortfolio().catch(() => null), getSectorFlows(5).catch(() => null),
   ]);
   const sectors = sectorMap(flows);
-  const heldSyms = (pf?.holdings || []).map((h) => h.symbol);
+  const core = coreConfig();
+  const heldSyms = (pf?.holdings || []).map((h) => h.symbol).filter((s) => s !== core.symbol);
   const unverified = [];
   let aiDown = false; // hết hạn mức / chưa có key: không gọi tiếp cho các mã còn lại
   const judge = async (a) => {
@@ -423,7 +437,17 @@ export async function buildReport(kind = 'close') {
   }
   const held = (await analyzeAll(heldSyms)).filter((a) => a.holding).map((a) => ({ a, sector: sectors.get(a.symbol)?.name }));
   const capital = accountCapital();
-  const plan = planOrders({ held, candidates, capital, buyCount });
+  const satCapital = capital != null ? capital * (1 - core.pct) : null;
+  const slots = slotsForCapital(satCapital);
+  const plan = planOrders({ held, candidates, capital: satCapital, buyCount, slots });
+  let coreInfo = null;
+  if (core.symbol && capital) {
+    const bars = (await getPriceHistory(core.symbol).catch(() => null))?.bars;
+    const price = bars?.at(-1)?.close;
+    const qty = (pf?.holdings || []).find((h) => h.symbol === core.symbol)?.qty ?? 0;
+    if (price) coreInfo = { symbol: core.symbol, pct: core.pct, price, order: coreOrder({ pct: core.pct, capital, price, qty }) };
+  }
+  plan.core = coreInfo;
   const { getMarketRegime } = await import('./regime.js');
   const regime = await getMarketRegime().catch(() => null);
   const expectation = plan.buys[0] ? candidates.find((c) => c.a.symbol === plan.buys[0].symbol)?.a.expectation : null;
@@ -431,10 +455,11 @@ export async function buildReport(kind = 'close') {
     rejected.length && `AI loại: ${rejected.map(esc).join(', ')}`,
     junk.length && `Chất lượng kém: ${junk.map(esc).join(', ')}`,
     unverified.length && `AI chưa thẩm định kịp: ${unverified.map(esc).join(', ')}`,
-    !capital && 'Đặt ACCOUNT_CAPITAL trong .env để tool tính số cổ phiếu mỗi lệnh.',
+    !capital && 'Đặt ACCOUNT_CAPITAL trong .env để tool tính số cổ phiếu và số suất theo vốn.',
+    !core.symbol && `Tùy chọn lõi ETF: CORE_ETF=${CORE_RULES.suggest.symbol}, CORE_PCT=${CORE_RULES.suggest.pct} (backtest: lãi ngang, sụt tối đa giảm ~2,5 điểm %).`,
   ].filter(Boolean);
   const date = market?.date || board.date;
-  const text = formatCloseReport({ date, market, regime, plan, summary: pf?.summary, expectation, notes });
+  const text = formatCloseReport({ date, market, regime, plan, summary: pf?.summary, expectation, notes, core: coreInfo });
   return { text, unverified, trades, plan, date };
 }
 
