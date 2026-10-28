@@ -108,12 +108,16 @@ export function buildExpectancy(cal, data, { start, minValue, members = null, st
 let table = null;    // bảng đang dùng
 let building = null; // đang dựng
 
-async function build() {
-  const cal = (await getPriceHistory('VNINDEX', Math.round((EXPECT_YEARS + 1.3) * 365))).bars;
-  const days = Math.round((EXPECT_YEARS + 1.3) * 365);
-  const start = Math.max(260, cal.length - Math.round(EXPECT_YEARS * 252));
+/**
+ * Dữ liệu theo thời điểm cho nghiên cứu: lịch phiên, rổ tại mỗi mốc lấy mẫu (gồm mã sau này hủy niêm yết), giá các mã.
+ * Dùng chung cho bảng kỳ vọng và nghiên cứu yếu tố (research.js).
+ */
+export async function loadPanel({ years = EXPECT_YEARS, step = EXPECT_STEP } = {}) {
+  const days = Math.round((years + 1.3) * 365);
+  const cal = (await getPriceHistory('VNINDEX', days)).bars;
+  const start = Math.max(260, cal.length - Math.round(years * 252));
   const snapDates = [];
-  for (let t = start; t < cal.length; t += EXPECT_STEP) snapDates.push(cal[t].time);
+  for (let t = start; t < cal.length; t += step) snapDates.push(cal[t].time);
   const pit = await pointInTimeUniverse(snapDates);
   const syms = pit.byDate.size ? [...new Set([...pit.byDate.values()].flat().map((u) => u.symbol))] : (await getScreenUniverse()).map((u) => u.symbol);
   const members = pit.byDate.size ? (date) => new Set((pit.byDate.get(date) || []).map((u) => u.symbol)) : null;
@@ -123,7 +127,12 @@ async function build() {
     const bars = all[k]?.bars;
     if (bars?.length) data[s] = { bars, at: new Map(bars.map((b, i) => [b.time, i])), read: factorReader(bars) };
   });
-  const out = { ...buildExpectancy(cal, data, { start, minValue: screenCriteria().minValue, members }), survivorshipBias: !pit.byDate.size, builtAt: new Date().toISOString() };
+  return { cal, data, start, step, members, minValue: screenCriteria().minValue, survivorshipBias: !pit.byDate.size };
+}
+
+async function build() {
+  const { cal, data, start, members, minValue, survivorshipBias } = await loadPanel();
+  const out = { ...buildExpectancy(cal, data, { start, minValue, members }), survivorshipBias, builtAt: new Date().toISOString() };
   await mkdir(dirname(FILE), { recursive: true });
   await writeFile(FILE, JSON.stringify(out), 'utf8');
   return out;

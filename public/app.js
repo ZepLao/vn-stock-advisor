@@ -2462,7 +2462,7 @@ const VERDICT = {
 };
 function verificationHtml(v) {
   if (!v?.hypotheses) return '';
-  const val = (h) => (h.mean == null ? '–' : h.id === 'H1' ? fmt(h.mean, 3) : h.id === 'H3' ? `${fmt(h.coverage * 100, 0)}% phủ` : pct(h.mean));
+  const val = (h) => (h.mean == null ? '–' : h.id === 'H1' || h.id === 'H5' ? fmt(h.mean, 3) : h.id === 'H3' ? `${fmt(h.coverage * 100, 0)}% phủ` : pct(h.mean));
   const remain = (h) => {
     if (h.verdict === 'supported' || h.verdict === 'rejected') return '–';
     const need = h.needDatesPrior ?? h.needDates;

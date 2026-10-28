@@ -10,6 +10,7 @@ import { atr, adx, sma } from './indicators.js';
 import { recordMany } from './predictions.js';
 import { BANDS, DEFAULTS, LOT, priceLimits, tickSize, roundUp, roundDown, calcMetrics, maxDrawdown } from './backtest.js';
 import { getQuarterly } from './company.js';
+import { factorPanel } from './factors.js';
 
 
 export const REGIMES = ['none', 'half', 'cash'];
@@ -37,6 +38,23 @@ export const FACTORS = [
 
 const round = (v, d = 2) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d);
 const MIN = 60_000;
+
+/**
+ * Mô hình xếp hạng. v1 = 4 yếu tố đang dùng. v2 (thử nghiệm) = nhóm biến động thấp: ATR%, biến động 60 phiên, lãi ngày lớn
+ * nhất 20 phiên — các yếu tố duy nhất đạt quy tắc đăng ký trước trong nghiên cứu 4 năm theo thời điểm (research.js,
+ * 10/2026: IC 20 phiên 0,084, t 3,0 so với v1 0,056, t 2,0). NHƯNG danh mục top 8 theo v2 kém xa v1 (3 năm +27% so với
+ * +80%, 4 năm +26% so với +95%, Sharpe 0,54 so với 1,16): v2 sắp đúng cả rổ chủ yếu nhờ đẩy mã biến động mạnh xuống đáy,
+ * còn lãi của v1 đến từ nhóm dẫn đầu xu hướng ở đỉnh. Vì vậy v2 KHÔNG thay bộ xếp hạng mua; chỉ chạy song song ('rank_v2')
+ * để kiểm chứng tương lai, ứng viên dùng làm bộ lọc TRÁNH mã biến động cao.
+ */
+export const MODELS = {
+  v1: { label: '4 yếu tố (động lượng, gần đỉnh, biến động thấp, ADX)', factors: null, reader: null },
+  v2: {
+    label: 'Biến động thấp (ATR%, biến động 60 phiên, lãi ngày lớn nhất)',
+    factors: [{ key: 'atr', label: 'ATR% thấp', sign: -1 }, { key: 'ivol', label: 'Biến động 60 phiên thấp', sign: -1 }, { key: 'maxret', label: 'Không có phiên tăng đột biến', sign: -1 }],
+    reader: (bars) => factorPanel(bars),
+  },
+};
 
 /** Trả hàm đọc giá trị các yếu tố tại phiên i (chỉ dùng dữ liệu đến phiên i). */
 export function factorReader(bars) {
@@ -314,13 +332,15 @@ export async function runRankPortfolio(opts = {}) {
   const trendFilter = opts.trendFilter !== false && opts.trendFilter !== '0' && opts.trendFilter !== 'false';
   const regime = REGIMES.includes(opts.regime) ? opts.regime : DEFAULT_REGIME;
   const earnings = opts.earnings === true || opts.earnings === '1' || opts.earnings === 'true';
-  const factors = earnings ? [...FACTORS, EARN_FACTOR] : FACTORS;
+  const model = MODELS[opts.model] && opts.model !== 'v1' ? opts.model : 'v1';
+  const factors = model === 'v2' ? MODELS.v2.factors : earnings ? [...FACTORS, EARN_FACTOR] : FACTORS;
+  const readerOf = model === 'v2' ? MODELS.v2.reader : factorReader;
   const initialCash = Number(opts.initialCash) > 0 ? Number(opts.initialCash) : DEFAULTS.initialCash;
   const { brokerage, sellTax, slippage } = DEFAULTS;
   const days = Math.round((years + 1.3) * 365);
 
   const c = screenCriteria();
-  const key = `rank-pf:pit:${years}:${top}:${rebalance}:${buffer}:${earnings}:${trendFilter}:${regime}:${initialCash}:${c.floors}:${c.minValue}`;
+  const key = `rank-pf:pit:${model}:${years}:${top}:${rebalance}:${buffer}:${earnings}:${trendFilter}:${regime}:${initialCash}:${c.floors}:${c.minValue}`;
   return cached(key, 30 * MIN, async () => {
     const indexRes = await getPriceHistory('VNINDEX', days);
     const cal = indexRes.bars;
@@ -344,7 +364,7 @@ export async function runRankPortfolio(opts = {}) {
     uni.forEach(({ symbol: s, exchange }, k) => {
       const bars = all[k]?.bars;
       if (!bars?.length) { missingPrice.push(s); return; }
-      data[s] = { bars, at: new Map(bars.map((b, i) => [b.time, i])), read: factorReader(bars), ex: BANDS[exchange] ? exchange : 'HOSE', earn: earnings ? earningsReader(quarterly[k]) : null };
+      data[s] = { bars, at: new Map(bars.map((b, i) => [b.time, i])), read: readerOf(bars), ex: BANDS[exchange] ? exchange : 'HOSE', earn: earnings ? earningsReader(quarterly[k]) : null };
     });
 
     const sim = simulateRankPortfolio(cal, data, {
@@ -375,7 +395,7 @@ export async function runRankPortfolio(opts = {}) {
     const out = (m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, typeof v === 'number' ? (Number.isFinite(v) ? round(v, 4) : null) : v]));
     return {
       regime: { mode: regime, bearPeriods: regimeLog.filter((x) => x.bear).length, periods: regimeLog.length, now: sim.bearNow ? 'bear' : 'bull' },
-      config: { years, top, rebalance, buffer, earnings, trendFilter, regime, initialCash, brokerage, sellTax, slippage, universe: Object.keys(data).length, criteria: c },
+      config: { model, years, top, rebalance, buffer, earnings, trendFilter, regime, initialCash, brokerage, sellTax, slippage, universe: Object.keys(data).length, criteria: c },
       // Rổ theo thời điểm: survivorshipBias = true nghĩa là không lấy được rổ lịch sử, kết quả bị thổi phồng
       universe: {
         mode: usePit ? 'point-in-time' : 'current', survivorshipBias: !usePit,

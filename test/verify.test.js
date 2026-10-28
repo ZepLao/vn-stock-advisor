@@ -77,3 +77,22 @@ test('dailyIc / verifyFromScored: phát hiện IC dương, nhóm mua hơn rổ, 
   const none = verifyFromScored(fixture(0));
   assert.notEqual(none.hypotheses[0].verdict, 'supported');
 });
+
+test('H5: mô hình v2 sắp thứ tự tốt hơn v1 trên cùng phiên thì ủng hộ; như nhau thì không', () => {
+  const r = rng(11);
+  const scored = [];
+  for (let d = 0; d < 40; d++) {
+    for (let k = 0; k < 30; k++) {
+      const v2 = r() * 100, noise = r() * 100;
+      const ex = 0.0008 * (v2 - 50) + (r() - 0.5) * 0.08;
+      const res = { 5: { excessBasket: ex }, 10: { excessBasket: ex }, 20: { excessBasket: ex } };
+      scored.push({ source: 'rank_all', symbol: `S${k}`, date: day(d), score: Math.round(noise), direction: 0, result: res });
+      scored.push({ source: 'rank_v2', symbol: `S${k}`, date: day(d), score: Math.round(v2), direction: 0, result: res });
+    }
+  }
+  const h5 = verifyFromScored(scored).hypotheses.find((h) => h.id === 'H5');
+  assert.equal(h5.verdict, 'supported');
+  assert.ok(h5.icV2 > 0.1);
+  const same = scored.map((x) => (x.source === 'rank_v2' ? { ...x, score: scored.find((y) => y.source === 'rank_all' && y.symbol === x.symbol && y.date === x.date).score } : x));
+  assert.notEqual(verifyFromScored(same).hypotheses.find((h) => h.id === 'H5').verdict, 'supported');
+});

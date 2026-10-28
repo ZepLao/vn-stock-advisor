@@ -4,6 +4,9 @@
 //  H2  Nhóm NÊN MUA theo xếp hạng (≥ 70, trên MA200) hơn rổ chia đều sau 20 phiên.
 //  H3  Dải giá 5–95% chứa giá thật ~90% số lần (không quá hẹp, không quá rộng).
 //  H4  Quyết định cuối (có AI) tốt hơn khuyến nghị chỉ theo luật trên cùng mã / phiên.
+//  H5  (thêm 10/2026, đăng ký trước khi có dữ liệu tương lai) Mô hình v2 — nhóm biến động thấp, chọn từ nghiên cứu
+//      research.js — sắp thứ tự tốt hơn v1: IC 5 phiên của v2 − v1 trên cùng phiên > 0. IC cao hơn KHÔNG đủ để thay bộ
+//      xếp hạng mua (backtest: top 8 theo v2 kém xa v1); H5 "ủng hộ" chỉ cho phép dùng v2 làm bộ lọc tránh mã biến động cao.
 // Mỗi giả thuyết quy về một chuỗi theo phiên (mỗi phiên một giá trị) rồi kiểm định trung bình bằng sai số chuẩn
 // Newey-West (độ trễ h − 1) vì các cửa sổ h phiên chồng nhau. |t| ≥ 2 mới kết luận; dưới VERIFY_RULES.minDates phiên
 // thì báo "chưa đủ dữ liệu" dù t lớn.
@@ -18,7 +21,7 @@ export const VERIFY_RULES = {
   minCross: 20,     // số mã tối thiểu mỗi phiên để tính IC
   bandTarget: 0.9,  // độ phủ mong muốn của dải 5–95%
   // Hiệu ứng giả định (để ước tính còn bao lâu nếu hiệu ứng thật cỡ này)
-  prior: { H1: 0.04, H2: 0.008, H3: 0.03, H4: 0.005 },
+  prior: { H1: 0.04, H2: 0.008, H3: 0.03, H4: 0.005, H5: 0.02 },
 };
 
 const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
@@ -154,6 +157,14 @@ export function verifyFromScored(scored, R = VERIFY_RULES) {
   const h4 = dailyMean(pairs, (x) => x.diff);
   hyp.push({ id: 'H4', title: 'Quyết định cuối (có AI) tốt hơn khuyến nghị theo luật trên cùng mã', metric: 'Chênh lãi hơn rổ TB', h: 10,
     ...testSeries(h4.map((x) => x.value), 9, R.prior.H4, R), pairs: pairs.length, disagree: pairs.filter((x) => x.diff !== 0).length });
+
+  // H5: v2 so với v1, chênh IC trên cùng phiên
+  const ic1 = new Map(dailyIc(rankAll, 5, R).map((x) => [x.date, x.ic]));
+  const ic2 = dailyIc(src('rank_v2'), 5, R);
+  const diff = ic2.filter((x) => ic1.has(x.date)).map((x) => x.ic - ic1.get(x.date));
+  const h5 = testSeries(diff, 4, R.prior.H5, R);
+  hyp.push({ id: 'H5', title: 'Mô hình v2 (biến động thấp) sắp thứ tự tốt hơn v1 (chênh IC 5 phiên)', metric: 'IC v2 − IC v1', h: 5, ...h5,
+    icV2: r4(mean(ic2.map((x) => x.ic))), note: h5.verdict === 'supported' ? 'có thể dùng v2 làm bộ lọc tránh mã biến động cao (không thay bộ xếp hạng mua)' : null });
 
   // Độ tự tin AI: tỷ lệ đúng so rổ theo nhóm độ tự tin (mốc 10 phiên)
   const calib = ['ai', 'committee', 'final'].map((s) => {
