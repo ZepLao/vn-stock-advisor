@@ -193,6 +193,28 @@ export async function getHolding(symbol, close = null) {
   };
 }
 
+/**
+ * Vị thế đang mở để định cỡ lệnh mới: giá trị và cắt lỗ kỹ thuật (cùng cách tính với bảng danh mục).
+ * @returns {Promise<{ symbol: string, value: number, close: number|null, stop: number|null }[]>}
+ */
+export async function getOpenRisk() {
+  await load();
+  const open = buildPositions(state.transactions).positions.filter((p) => p.qty > 0);
+  const res = await Promise.all(open.map((p) => getPriceHistory(p.symbol).catch(() => null)));
+  return open.map((p, k) => {
+    const b = res[k]?.bars;
+    const close = b?.at(-1)?.close ?? null;
+    const stop = b?.length >= 30 ? technicalAnalysis(b, null, {}).plan?.stopLoss ?? null : null;
+    return { symbol: p.symbol, value: close != null ? p.qty * close * 1000 : p.cost, close, stop };
+  });
+}
+
+/** Các mã đang nắm giữ (số lượng > 0). */
+export async function heldSymbols() {
+  await load();
+  return buildPositions(state.transactions).positions.filter((p) => p.qty > 0).map((p) => p.symbol);
+}
+
 /** Báo cáo danh mục đầy đủ cho giao diện. */
 export async function getPortfolio() {
   await load();

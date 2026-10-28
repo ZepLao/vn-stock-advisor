@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildRef, compositeScore, rankLabel, factorReader } from '../src/ranking.js';
-import { scoreItem } from '../src/predictions.js';
+import { scoreItem, basketReturns } from '../src/predictions.js';
 
 const day = (i) => new Date(Date.UTC(2024, 0, 1 + i)).toISOString().slice(0, 10);
 
@@ -47,6 +47,20 @@ test('Chấm dự đoán sau 5/10/20 phiên so với VN-Index', () => {
   const s = scoreItem({ date: day(0), direction: -1 }, stock, index);
   assert.equal(s[10].correct, false);
   assert.equal(scoreItem({ date: day(25), direction: 1 }, stock, index)[5], undefined); // chưa đủ phiên
+});
+
+test('Chấm so với rổ đồng tỷ trọng: VN-Index bị một mã lớn kéo', () => {
+  const mk = (f) => Array.from({ length: 30 }, (_, i) => ({ time: day(i), close: f(i) }));
+  const index = mk((i) => 100 + 2 * i); // +10% sau 5 phiên
+  const pick = mk((i) => 10 + 0.1 * i); // +5%
+  const flat = Object.fromEntries(Array.from({ length: 25 }, (_, k) => [`S${k}`, mk(() => 20)])); // rổ đứng giá
+  const basket = basketReturns({ ...flat, PICK: pick }, index);
+  assert.ok(Math.abs(basket(day(0), 5) - 0.05 / 26) < 1e-9);
+  const r = scoreItem({ date: day(0), direction: 1 }, pick, index, basket)[5];
+  assert.equal(r.beatIndex, false); // thua VN-Index
+  assert.equal(r.beatBasket, true); // nhưng hơn mặt bằng cổ phiếu
+  assert.equal(basketReturns(flat, index)(day(28), 5), null); // chưa đủ phiên
+  assert.equal(basketReturns({ PICK: pick }, index)(day(0), 5), null); // quá ít mã
 });
 
 test('Khuyến nghị theo điểm xếp hạng và bộ lọc chặn', async () => {

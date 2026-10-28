@@ -94,9 +94,9 @@ export async function runAi(symbol, { force = false, analysis = null } = {}) {
   recordForecast(a.symbol, { date: a.price.date, close: a.price.close, forecast: result.forecast, cone: a.cone }).catch(() => {});
   if (result.final) {
     const dir = { BUY: 1, ACCUMULATE: 1, HOLD: 0, AVOID: -1, SELL: -1 }[result.final.code];
-    recordPrediction({ source: 'final', symbol: a.symbol, date: a.price.date, direction: dir, label: result.final.label, price: a.price.close, detail: result.final.relation });
+    recordPrediction({ source: 'final', symbol: a.symbol, date: a.price.date, direction: dir, label: result.final.label, price: a.price.close, detail: result.final.relation, confidence: result.confidence });
   }
-  recordPrediction({ source: 'ai', symbol: a.symbol, date: a.price.date, direction: AI_DIRECTION[result.decision], label: result.decisionLabel, price: a.price.close, detail: `Tin cậy ${result.confidence}%` });
+  recordPrediction({ source: 'ai', symbol: a.symbol, date: a.price.date, direction: AI_DIRECTION[result.decision], label: result.decisionLabel, price: a.price.close, detail: `Tin cậy ${result.confidence}%`, confidence: result.confidence });
   return result;
 }
 

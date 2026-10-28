@@ -45,7 +45,7 @@ test('Sắp ứng viên: ngành mạnh trước, cùng hạng thì điểm cao t
 });
 
 const good = { epsTTM: 2000, roe: 0.18, debtToEquity: 0.8 };
-const bars = Array.from({ length: 20 }, () => ({ close: 30, volume: 1_000_000 })); // 30 tỷ/phiên
+const bars = Array.from({ length: 20 }, (_, i) => ({ close: 30, high: 30 + (i % 4) / 2, low: 29, volume: 1_000_000 })); // 30 tỷ/phiên
 const stock = (f, extra = {}) => ({ fundamental: { data: f }, price: { close: 30 }, sector: { name: 'Thép' }, recentBars: bars, ...extra });
 
 test('Mã rác: lỗ, ROE thấp, nợ cao, penny kém, thiếu số liệu, thanh khoản không đều', () => {
@@ -59,4 +59,6 @@ test('Mã rác: lỗ, ROE thấp, nợ cao, penny kém, thiếu số liệu, tha
   assert.equal(junkCheck(stock(null)).junk, true);
   const thin = bars.map((b, i) => (i % 3 ? b : { close: 30, volume: 50_000 })); // 7/20 phiên chỉ 1,5 tỷ
   assert.equal(junkCheck(stock(good, { recentBars: thin })).junk, true);
+  const pinned = bars.map((b) => ({ ...b, close: 48, high: 48.1, low: 47.8 })); // NAF 10/2026: biên độ 0,6%/20 phiên
+  assert.match(junkCheck(stock(good, { recentBars: pinned })).reasons[0], /bị ghim/);
 });

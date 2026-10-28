@@ -11,15 +11,17 @@ const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').
 const num = (v, d = 2) => (v == null || !Number.isFinite(v) ? '–' : v.toLocaleString('vi-VN', { maximumFractionDigits: d }));
 
 export const HELP = [
-  '<b>Ghi giao dịch vào danh mục</b>',
-  'mua HPG 1000 25.5 21/10',
-  'bán VPB 500 24.2',
-  '<i>(mã · số lượng · giá nghìn đồng · ngày, bỏ trống ngày = hôm nay)</i>',
+  '🤖 <b>TRỢ LÝ CHỨNG KHOÁN (VN-STOCK BOT)</b>',
+  '━━━━━━━━━━━━━━━━━━━━',
+  '📝 <b>Ghi nhận giao dịch vào danh mục:</b>',
+  '• <code>mua HPG 1000 25.5 21/10</code>',
+  '• <code>bán VPB 500 24.2</code>',
+  '<i>(Cú pháp: mua/bán [mã] [số lượng] [giá] [ngày])</i>',
   '',
-  '<b>Lệnh khác</b>',
-  'danh mục — xem danh mục đang giữ',
-  'tuần — triển vọng thị trường tuần (AI)',
-  'hoàn tác — xóa giao dịch vừa thêm',
+  '⚡ <b>Lệnh tra cứu nhanh:</b>',
+  '• <code>danh mục</code> — Xem danh mục nắm giữ & lãi/lỗ',
+  '• <code>tuần</code> — Xem triển vọng thị trường tuần (AI)',
+  '• <code>hoàn tác</code> — Xóa giao dịch vừa ghi qua bot',
 ].join('\n');
 
 const strip = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
@@ -133,12 +135,21 @@ const ddmmyyyy = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}`;
 
 async function portfolioText(getPortfolio) {
   const p = await getPortfolio();
-  if (!p.holdings?.length) return 'Danh mục đang trống.';
+  if (!p.holdings?.length) return '📭 Danh mục của bạn hiện đang trống.';
   const s = p.summary;
-  const lines = [`🧾 <b>DANH MỤC</b> · ${s.unrealizedPct >= 0 ? 'lãi' : 'lỗ'} ${num(Math.abs(s.unrealizedPct), 1)}% · ${num(s.marketValue / 1e6, 2)} tr`];
+  const pnlSign = s.unrealizedPct >= 0 ? '+' : '';
+  const lines = [
+    '🧾 <b>DANH MỤC NẮM GIỮ</b>',
+    '━━━━━━━━━━━━━━━━━━━━',
+    `📊 Tổng NAV: <b>${num(s.marketValue / 1e6, 2)} tr</b> · Hiệu suất: <b>${pnlSign}${num(s.unrealizedPct, 1)}%</b>`,
+  ];
   for (const h of p.holdings) {
-    lines.push('', `▸ <b>${esc(h.symbol)}</b>  ${num(h.qty, 0)} cp · vốn ${num(h.avgCost)}`,
-      `     giá ${num(h.close)} · ${h.unrealizedPct >= 0 ? 'lãi' : 'lỗ'} ${num(Math.abs(h.unrealizedPct), 1)}%`);
+    const pnl = h.unrealizedPct >= 0 ? `lãi <b>+${num(h.unrealizedPct, 1)}%</b>` : `lỗ <b>−${num(Math.abs(h.unrealizedPct), 1)}%</b>`;
+    lines.push(
+      '',
+      `▸ <b>${esc(h.symbol)}</b> · Giá <b>${num(h.close)}</b> (vốn ${num(h.avgCost)} · ${pnl})`,
+      `  💼 Khối lượng: <b>${num(h.qty, 0)}</b> cp`
+    );
   }
   return lines.join('\n');
 }

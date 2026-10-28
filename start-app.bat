@@ -37,9 +37,10 @@ if not exist "%TSDIR%\tailscale.exe" (
   echo       Chua cai Tailscale, bo qua truy cap tu dien thoai.
   goto run_app
 )
-rem Mo ung dung Tailscale (khay he thong) neu chua chay
+rem Mo ung dung Tailscale (khay he thong) neu chua chay. Mo qua explorer de tach khoi cua so nay:
+rem "start" truc tiep lam tailscale-ipn bam vao console (in log "ui: ...") va cua so khong tu dong duoc
 tasklist /fi "imagename eq tailscale-ipn.exe" | find /i "tailscale-ipn.exe" >nul
-if not %errorlevel%==0 start "" "%TSDIR%\tailscale-ipn.exe"
+if not %errorlevel%==0 explorer.exe "%TSDIR%\tailscale-ipn.exe"
 rem Ket noi neu dang ngat (dung tai khoan da dang nhap truoc do)
 "%TSDIR%\tailscale.exe" status >nul 2>&1
 if not %errorlevel%==0 "%TSDIR%\tailscale.exe" up >nul 2>&1
@@ -95,3 +96,4 @@ echo Xong. App: http://localhost:3000  ^|  Database: http://localhost:8081
 if defined TSIP echo Dien thoai (Tailscale): https://wolf.tailcdd8b1.ts.net  ^|  http://%TSIP%:8080
 echo Cua so nay tu dong sau 10 giay.
 timeout /t 10 >nul
+exit

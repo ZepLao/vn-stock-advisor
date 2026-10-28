@@ -12,9 +12,10 @@ import { getRankBoard } from './ranking.js';
 import { uncache } from './http.js';
 import { getTuning } from './tuning.js';
 import { recordTrades } from './selfreview.js';
-import { telegramConfig, sendMessage, aiFinal, buyLevels, buyLine, tradeRecord, marketLine } from './telegram.js';
+import { telegramConfig, sendMessage, aiFinal, buyLevels, buyLine, tradeRecord, marketLine, esc, num } from './telegram.js';
 import { getSectorFlows } from './sectors.js';
 import { sectorMap, orderBySector, junkCheck, rewardCheck } from './picks.js';
+import { getMarketRegime } from './regime.js';
 
 const DATA = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const FILE = join(DATA, 'radar.json');
@@ -51,6 +52,8 @@ export function radarCandidates(rows, { held = new Set(), seen = new Set(), chec
   const list = rows
     .filter((r) => r.pfRank != null && r.score >= 70 && !held.has(r.symbol) && !seen.has(r.symbol))
     .filter((r) => !checked[r.symbol] || now - checked[r.symbol] >= RADAR.recheckMinutes * 60_000);
+  // Ưu tiên các mã đạt chuẩn Trend Pick 8 năm lên trước
+  list.sort((a, b) => (b.trendPick ? 1 : 0) - (a.trendPick ? 1 : 0));
   return orderBySector(list, sectors).slice(0, limit).map((r) => r.symbol);
 }
 
@@ -83,15 +86,50 @@ async function openSent() {
 
 export function radarMessage(a, final, rank, market, { aiNo = false } = {}) {
   const hhmm = vnNow().toISOString().slice(11, 16);
+  const badges = [];
+  if (a.trendPick || rank?.trendPick) badges.push('★ TREND PICK');
+  if (a.vcp?.isVcp) badges.push('★ VCP');
+  if (a.pocketPivot?.isPocketPivot) badges.push('⚡ POCKET PIVOT');
+  const badgeLine = badges.length ? `🏷️ <code>[ ${badges.join(' · ')} ]</code>` : null;
+
+  const mcLine = a.monteCarlo
+    ? `  🎲 Monte Carlo (20p): P(tăng) <b>${Math.round(a.monteCarlo.probUp * 100)}%</b> · R/R <b>${a.monteCarlo.rr}</b> · <b>${a.monteCarlo.signal}</b>`
+    : null;
+  const rankLine = `  🏆 Xếp hạng: <b>${rank.score}đ</b>${rank.pfRank ? ` (#${rank.pfRank} trên MA200)` : ''} · <i>Vừa chạm vùng mua</i>`;
+
   return [
-    `🎯 <b>CƠ HỘI MUA</b> · ${hhmm}`,
+    `🎯 <b>CƠ HỘI MUA TRONG PHIÊN</b> · <code>${hhmm}</code>`,
+    '━━━━━━━━━━━━━━━━━━━━',
     marketLine(market),
+    badgeLine,
     '',
     buyLine(a, final, { aiNo }),
-    `Xếp hạng ${rank.score}đ${rank.pfRank ? ` (#${rank.pfRank} nhóm trên MA200)` : ''} · giá vừa vào vùng mua`,
+    rankLine,
+    mcLine,
     '',
-    `<i>${aiNo ? 'AI chưa đồng ý, cân nhắc kỹ.' : 'Đã qua AI thẩm định.'} Gợi ý tự động, không phải lời khuyên đầu tư.</i>`,
-  ].filter((x) => x != null).join('\n');
+    `<i>${aiNo ? '⚠️ AI chưa đồng ý, cân nhắc kỹ.' : '✅ Đã qua AI thẩm định.'} Khuyến nghị tự động theo dõi trong phiên.</i>`,
+  ].filter((x) => x != null && x !== '').join('\n');
+}
+
+export function radarRiskMessage(a, holding) {
+  const hhmm = vnNow().toISOString().slice(11, 16);
+  const reasons = a.stockRisk?.reasons?.join(' · ') || 'Dấu hiệu rủi ro cao';
+  const close = a.price?.close;
+  const chg = a.price?.changePct != null ? `${a.price.changePct >= 0 ? '+' : ''}${a.price.changePct}%` : '–';
+  const avg = holding?.avgCost || holding?.costPrice;
+  const pnl = avg && close ? ((close / avg - 1) * 100).toFixed(1) : null;
+  const pnlText = pnl != null ? ` (${pnl >= 0 ? 'Lãi +' : 'Lỗ '}${pnl}%)` : '';
+
+  return [
+    `🚨 <b>CẢNH BÁO NGUY HIỂM DANH MỤC</b> · <code>${hhmm}</code>`,
+    '━━━━━━━━━━━━━━━━━━━━',
+    `⚠️ Mã <b>${esc(a.symbol)}</b> · Giá hiện tại: <b>${num(close)}</b> (${chg})`,
+    `  • Vị thế: Đang giữ <b>${num(holding?.qty, 0)}</b> cp · Giá vốn <b>${num(avg)}</b>${pnlText}`,
+    `  • Mức độ rủi ro: <b>${esc(a.stockRisk?.riskLevel || 'RẤT CAO')}</b>`,
+    `  • Tín hiệu vi phạm: <i>${esc(reasons)}</i>`,
+    '',
+    '👉 <b>KHUYẾN NGHỊ:</b> Kích hoạt lệnh BÁN hoặc hạ tỷ trọng ngay để bảo toàn vốn!',
+  ].join('\n');
 }
 
 let busy = false;
@@ -122,8 +160,32 @@ export async function radarTick({ force = false } = {}) {
     const sectors = sectorMap(flows);
     const held = new Set((pf?.holdings || []).map((h) => h.symbol));
     const seen = new Set([...st.seen, ...reported]);
+    // Quét cảnh báo rủi ro rơi tự do cho các mã đang nắm giữ trong danh mục
+    for (const h of pf?.holdings || []) {
+      if (st.riskAlerted?.[h.symbol] === today) continue;
+      const ha = await analyzeSymbol(h.symbol, { withChart: false }).catch(() => null);
+      if (ha?.stockRisk?.isRisky) {
+        (st.riskAlerted ??= {})[h.symbol] = today;
+        const alertText = radarRiskMessage(ha, h);
+        if (!force && telegramConfig().enabled) {
+          await sendMessage(alertText).catch((err) => console.error('[Radar] Lỗi gửi cảnh báo rủi ro:', err.message));
+        }
+        await tracker.pushAlert(h.symbol, 'risk', `Cảnh báo rủi ro cao: ${ha.stockRisk.reasons.join(' · ')}`);
+        console.warn(`[Radar] Báo động rủi ro danh mục cho ${h.symbol}`);
+      }
+    }
+
     const now = Date.now();
     const found = [];
+
+    // Kiểm tra chế độ thị trường chung: Nếu thị trường rủi ro cao, không báo điểm mua mới
+    const regime = await getMarketRegime().catch(() => null);
+    if (!force && regime && !regime.allowNewBuys) {
+      const why = regime.distDays != null ? `${regime.distDays} ngày phân phối` : regime.label;
+      console.warn(`[Radar] Thị trường không cho mua mới (${why}), tạm dừng phát tín hiệu MUA mới.`);
+      await save();
+      return { date: today, skipped: `thị trường rủi ro (${why}, ưu tiên giữ tiền)` };
+    }
     for (const sym of radarCandidates(board.rows, { held, seen, checked: st.checked, now, sectors })) {
       if (st.sent.length >= maxDaily) break;
       st.checked[sym] = now;

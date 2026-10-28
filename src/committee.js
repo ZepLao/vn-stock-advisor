@@ -208,7 +208,7 @@ function sanitizeJudge(r, close) {
 const pc = (v) => `${(v * 100).toFixed(1)}%`;
 
 /**
- * Căn cứ lịch sử: chiến lược danh mục theo điểm xếp hạng (đã kiểm chứng), KHÔNG dùng backtest điểm kỹ thuật kiểu cũ
+ * Căn cứ lịch sử: chiến lược danh mục theo điểm xếp hạng (backtest rổ theo thời điểm), KHÔNG dùng backtest điểm kỹ thuật kiểu cũ
  * (đã chứng minh không dự báo được hướng giá). Kèm vị trí hiện tại của mã trong quy tắc mua/giữ.
  */
 function rankEvidence(bt, a) {
@@ -220,7 +220,8 @@ function rankEvidence(bt, a) {
         : `hạng ${r.pfRank} trong nhóm trên MA200 → ngoài danh mục mẫu top ${PORTFOLIO_RULE.top}`;
   return `Danh mục theo điểm xếp hạng (top ${bt.config.top} mã trên MA200, đổi mỗi ${bt.config.rebalance} phiên), ${bt.period.from} → ${bt.period.to}: `
     + `lời ${pc(m.totalReturn)} so với VN-Index ${pc(m.benchmarkReturn)}, sụt giảm tối đa ${pc(m.maxDrawdown)}, tỷ lệ lệnh thắng ${pc(m.winRate)} (${m.tradeCount} lệnh), `
-    + `${acc.periodsBeatIndex}/${acc.periods} kỳ thắng VN-Index. Lưu ý: từng mã được chọn chỉ thắng VN-Index ~51% số lần, và 12 tháng gần nhất danh mục thua VN-Index (−12% so với −3%). Vị trí của ${a.symbol}: ${where}.`;
+    + `${acc.periodsBeatIndex}/${acc.periods} kỳ thắng VN-Index; từng mã được chọn thắng VN-Index ${acc.picks ? pc(acc.picksBeatIndex / acc.picks) : 'n/a'} số lần`
+    + `${bt.universe?.survivorshipBias ? ' (CẢNH BÁO: rổ hiện tại, có thiên lệch sống sót, kết quả bị thổi phồng)' : ''}. Vị trí của ${a.symbol}: ${where}.`;
 }
 
 const f2 = (v) => (Number.isFinite(v) ? Number(v.toFixed(2)) : 'n/a');
@@ -292,7 +293,7 @@ async function run(symbol, { force = false } = {}) {
   job.stage = 'Gemini phân tích 6 yếu tố thị trường';
   const gemini = await runAi(symbol, { analysis: a, force });
 
-  const evidence = ['\n## Căn cứ lịch sử (máy tính, đã kiểm chứng)'];
+  const evidence = ['\n## Căn cứ lịch sử (máy tính, backtest rổ theo thời điểm; quá khứ không đảm bảo tương lai)'];
   if (bt) evidence.push(rankEvidence(bt, a));
   if (risk) evidence.push(riskBrief(risk));
   const base = buildPrompt(a).replace(/\nHãy phân tích và trả về JSON theo schema\.$/, '') + evidence.join('\n')
@@ -354,10 +355,10 @@ export async function startCommittee(symbol, { force = false } = {}) {
   jobs.set(symbol, { status: 'running', step: 0, steps: 4, stage: 'Chuẩn bị', error: null, startedAt: new Date().toISOString() });
   run(symbol, { force }).then(async (result) => {
     await persist(result);
-    recordPrediction({ source: 'committee', symbol, date: result.priceDate, direction: DIRECTION[result.verdict.decision], label: result.verdict.decisionLabel, price: result.price, detail: `Tin cậy ${result.verdict.confidence}%` });
+    recordPrediction({ source: 'committee', symbol, date: result.priceDate, direction: DIRECTION[result.verdict.decision], label: result.verdict.decisionLabel, price: result.price, detail: `Tin cậy ${result.verdict.confidence}%`, confidence: result.verdict.confidence });
     if (result.final) {
       const dir = { BUY: 1, ACCUMULATE: 1, HOLD: 0, AVOID: -1, SELL: -1 }[result.final.code];
-      recordPrediction({ source: 'final', symbol, date: result.priceDate, direction: dir, label: result.final.label, price: result.price, detail: `hội đồng: ${result.final.relation}` });
+      recordPrediction({ source: 'final', symbol, date: result.priceDate, direction: dir, label: result.final.label, price: result.price, detail: `hội đồng: ${result.final.relation}`, confidence: result.verdict.confidence });
     }
     jobs.set(symbol, { status: 'done', stage: null, error: null });
   }).catch((err) => {

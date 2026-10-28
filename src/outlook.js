@@ -212,7 +212,7 @@ export async function buildOutlook(now = new Date()) {
   await writeFile(FILE, JSON.stringify(x, null, 2), 'utf8');
   // Ghi dự đoán để tự chấm sau 5 phiên
   recordMany([
-    { source: 'outlook', symbol: 'VNINDEX', date: x.date, direction: TREND_DIR[result.trend], label: `Tuần: ${TRENDS[result.trend]}`, price: x.close, detail: `${result.low}–${result.high}, tin cậy ${result.confidence}%` },
+    { source: 'outlook', symbol: 'VNINDEX', date: x.date, direction: TREND_DIR[result.trend], label: `Tuần: ${TRENDS[result.trend]}`, price: x.close, detail: `${result.low}–${result.high}, tin cậy ${result.confidence}%`, confidence: result.confidence, band: { 5: [result.low, result.high] } },
     ...result.hotSectors.flatMap((h) => h.symbols.map((s) => ({ source: 'outlook_sector', symbol: s, date: x.date, direction: 1, label: `Ngành ${h.name} (${SECTOR_VIEWS[h.view]})` }))),
   ]).catch(() => {});
   return x;

@@ -197,7 +197,7 @@ này sát giá hiện tại. Thực tế đã kiểm chứng: biến động th�
 Nguyên tắc:
 - Chỉ dùng số liệu có trong dữ liệu; không bịa thêm số liệu, sự kiện hay tin tức. Thiếu dữ liệu thì ghi vào dataGaps.
 - Cân nhắc cả xu hướng kỹ thuật, định giá, chất lượng tăng trưởng, tin tức và bối cảnh VN-Index.
-- Điểm xếp hạng 4 yếu tố là tín hiệu định lượng đã kiểm chứng; điểm kỹ thuật kiểu cũ chỉ để tham khảo. Chỉ chọn MUA khi
+- Điểm xếp hạng 4 yếu tố là tín hiệu định lượng chính (lợi thế lịch sử nhỏ, không chắc chắn); điểm kỹ thuật kiểu cũ chỉ để tham khảo. Chỉ chọn MUA khi
   mã thuộc nhóm điểm ≥ 70 và giá trên MA200, trừ khi có lý do rất rõ trong dữ liệu.
 - Không dựa vào một chỉ báo đơn lẻ: xác nhận chéo xu hướng (MA + ADX), động lượng (RSI + MACD + Stochastic),
   dòng tiền (MFI + OBV + khối lượng + khối ngoại) và sức mạnh tương đối so với VN-Index. Nêu rõ khi các nhóm mâu thuẫn.
@@ -366,11 +366,11 @@ function buildPrompt(a) {
 
   if (a.ranking) {
     const r = a.ranking;
-    lines.push('\n## Điểm xếp hạng 4 yếu tố (tín hiệu CHÍNH, đã kiểm chứng ngoài mẫu)');
+    lines.push('\n## Điểm xếp hạng 4 yếu tố (tín hiệu CHÍNH)');
     lines.push(`Điểm ${r.score}/100, hạng ${r.position}/${r.universe} trong rổ HOSE thanh khoản ≥ 5 tỷ; giá ${r.aboveMa200 === false ? 'DƯỚI' : 'trên'} MA200. Phân vị: động lượng 12 tháng ${r.parts.mom ?? 'n/a'}, gần đỉnh 52 tuần ${r.parts.high ?? 'n/a'}, biến động thấp ${r.parts.atr ?? 'n/a'}, ADX ${r.parts.adx ?? 'n/a'}.`);
     lines.push(`Khuyến nghị hệ thống: ${a.recommendation.label} — ${a.recommendation.desc}`);
-    lines.push('Bằng chứng lịch sử 2022–2026: chỉ nhóm điểm ≥ 70 và trên MA200 thắng VN-Index ổn định (+0,7–0,9%/20 phiên); nhóm ≥ 70 nhưng dưới MA200 thua 1–1,5%; các nhóm khác không có lợi thế.');
-    lines.push(`Hạng trong nhóm trên MA200: ${r.pfRank ?? 'không thuộc nhóm (dưới MA200)'}. Danh mục mẫu của hệ thống là top 8 mã trên MA200, đổi mỗi 20 phiên; từng mã được chọn chỉ thắng VN-Index ~51% số lần trong lịch sử, lợi thế đến từ cả rổ và kỷ luật cắt lỗ, và 12 tháng gần nhất danh mục này thua VN-Index.`);
+    lines.push('Lưu ý bằng chứng: nghiên cứu cũ cho nhóm ≥ 70 trên MA200 lợi thế nhỏ so với VN-Index nhưng chạy trên rổ hiện tại (thiên lệch sống sót), nên lợi thế thật có thể nhỏ hơn hoặc không có. Không coi điểm xếp hạng là chắc chắn.');
+    lines.push(`Hạng trong nhóm trên MA200: ${r.pfRank ?? 'không thuộc nhóm (dưới MA200)'}. Danh mục mẫu của hệ thống là top 8 mã trên MA200, đổi mỗi 20 phiên; từng mã được chọn chỉ thắng VN-Index ~51% số lần trong lịch sử, lợi thế (nếu có) đến từ cả rổ chứ không từ từng mã (danh mục mẫu không dùng cắt lỗ), và 12 tháng gần nhất danh mục này thua VN-Index.`);
   }
   lines.push('\n## Điểm kỹ thuật/cơ bản/tin tức kiểu cũ (−100..100) — CHỈ THAM KHẢO: đã kiểm chứng KHÔNG dự báo được hướng giá');
   lines.push(`Tổng ${a.total} (${a.legacy?.label ?? ''}). Kỹ thuật ${a.scores.technical}, cơ bản ${a.scores.fundamental ?? 'n/a'}, tin tức ${a.scores.news ?? 'n/a'}.`);

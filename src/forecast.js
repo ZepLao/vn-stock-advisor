@@ -7,7 +7,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getPriceHistory } from './data.js';
-import { DEFAULTS } from './backtest.js';
+import { DEFAULTS, rng } from './backtest.js';
 import { getTuning } from './tuning.js';
 
 const FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'forecasts.json');
@@ -110,6 +110,149 @@ export function validateCone(bars, h, { years = 2, step = 5, lookback = LOOKBACK
     points,
   };
 }
+
+// Seed cố định theo mã/phiên/giá: cùng dữ liệu luôn ra cùng kết quả (không nhảy tín hiệu giữa hai lần gọi)
+function seedOf(bars) {
+  const s = `${bars.length}|${bars.at(-1).time}|${bars.at(-1).close}|${bars[0].close}`;
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
+
+/**
+ * Mô phỏng Monte Carlo (bootstrap đường giá theo phân phối biến động thực tế của mã,
+ * tuân thủ biên độ trần/sàn Việt Nam, tham khảo phương pháp Laban).
+ * Đã BỎ TRÔI TRUNG BÌNH (như dải thống kê): mô phỏng chỉ đo biên độ và rủi ro đuôi, không ngoại suy xu hướng quá khứ
+ * thành xác suất tăng (nếu không, mã vừa tăng mạnh tự động có probUp cao — tức là đếm lại động lượng lần hai).
+ * Lấy mẫu theo khối liên tiếp `block` phiên để giữ hiện tượng biến động co cụm.
+ * Trả về phân phối: prob_up, prob_gain5, prob_loss7, tỷ lệ R/R, và tín hiệu rủi ro.
+ */
+export function monteCarloForecast(bars, H = 20, numPaths = 1000, { exchange = 'HOSE', isRisky = false, block = 5, seed = null } = {}) {
+  if (!bars || bars.length < 30) return null;
+  const n = bars.length;
+  const lastBar = bars[n - 1];
+  const baseClose = lastBar.close;
+
+  // Lấy mẫu biến động ngày tương đối từ 120-250 phiên gần nhất
+  const lookback = Math.min(250, n - 1);
+  const sampleSteps = [];
+  for (let i = n - lookback; i < n; i++) {
+    const prevC = bars[i - 1].close;
+    if (prevC > 0) {
+      sampleSteps.push({
+        oRatio: bars[i].open / prevC,
+        hRatio: (bars[i].high ?? bars[i].close) / prevC,
+        lRatio: (bars[i].low ?? bars[i].close) / prevC,
+        cRatio: bars[i].close / prevC,
+      });
+    }
+  }
+
+  if (sampleSteps.length < 20) return null;
+  // Bỏ trôi: chia mọi tỷ lệ cho exp(trung bình log lợi suất đóng cửa)
+  const drift = Math.exp(sampleSteps.reduce((s, x) => s + Math.log(x.cRatio), 0) / sampleSteps.length);
+  for (const x of sampleSteps) { x.oRatio /= drift; x.hRatio /= drift; x.lRatio /= drift; x.cRatio /= drift; }
+  const rand = rng(seed ?? seedOf(bars));
+  const B = Math.max(1, Math.min(block, sampleSteps.length));
+
+  const band = (exchange === 'HNX' ? 0.10 : exchange === 'UPCOM' ? 0.15 : 0.07);
+  const finalRets = [];
+  const peakGains = [];
+  const troughDds = [];
+  const stepPrices = Array.from({ length: H }, () => []);
+
+  for (let p = 0; p < numPaths; p++) {
+    let currClose = baseClose;
+    let pathMaxH = baseClose;
+    let pathMinL = baseClose;
+
+    let idx = 0;
+    for (let step = 0; step < H; step++) {
+      // Đầu mỗi khối chọn vị trí ngẫu nhiên, trong khối lấy các phiên liên tiếp
+      idx = step % B === 0 ? Math.floor(rand() * (sampleSteps.length - B + 1)) : idx + 1;
+      const s = sampleSteps[idx];
+      const loLimit = currClose * (1 - band);
+      const hiLimit = currClose * (1 + band);
+
+      const o = Math.max(loLimit, Math.min(hiLimit, currClose * s.oRatio));
+      let h = Math.max(loLimit, Math.min(hiLimit, currClose * s.hRatio));
+      let l = Math.max(loLimit, Math.min(hiLimit, currClose * s.lRatio));
+      const c = Math.max(loLimit, Math.min(hiLimit, currClose * s.cRatio));
+
+      h = Math.max(h, o, c);
+      l = Math.min(l, o, c);
+
+      if (h > pathMaxH) pathMaxH = h;
+      if (l < pathMinL) pathMinL = l;
+      currClose = c;
+      stepPrices[step].push(currClose);
+    }
+
+    finalRets.push(((currClose / baseClose) - 1) * 100);
+    peakGains.push(((pathMaxH / baseClose) - 1) * 100);
+    troughDds.push(((pathMinL / baseClose) - 1) * 100);
+  }
+
+  finalRets.sort((a, b) => a - b);
+  peakGains.sort((a, b) => a - b);
+  troughDds.sort((a, b) => a - b);
+
+  const dates = futureDates(lastBar.time, H);
+  const projectionSeries = [];
+  for (let step = 0; step < H; step++) {
+    const prices = stepPrices[step].sort((a, b) => a - b);
+    projectionSeries.push({
+      step: step + 1,
+      time: dates[step],
+      p10: round(quantile(prices, 0.1)),
+      p50: round(quantile(prices, 0.5)),
+      p90: round(quantile(prices, 0.9)),
+    });
+  }
+
+  const stats = {
+    h: H,
+    numPaths,
+    baseClose,
+    finalRetMedian: round(quantile(finalRets, 0.5)),
+    finalRetP10: round(quantile(finalRets, 0.1)),
+    finalRetP90: round(quantile(finalRets, 0.9)),
+    peakGainMedian: round(quantile(peakGains, 0.5)),
+    troughDdMedian: round(quantile(troughDds, 0.5)),
+    probUp: round(finalRets.filter((r) => r > 0).length / numPaths, 3),
+    probGain5: round(peakGains.filter((g) => g >= 5.0).length / numPaths, 3),
+    probLoss7: round(troughDds.filter((d) => d <= -7.0).length / numPaths, 3),
+    projectionSeries,
+  };
+
+  const signalRes = classifySignal(stats, isRisky);
+  return { ...stats, ...signalRes };
+}
+
+/**
+ * Phân loại tín hiệu giao dịch dựa trên xác suất Monte Carlo (tham khảo Laban _classify_signal).
+ */
+export function classifySignal(st, isRisky = false) {
+  const gain = st.peakGainMedian ?? 0;
+  const dd = st.troughDdMedian ?? 0;
+  const rr = Math.min(99.0, Math.max(gain, 1e-5) / Math.max(-dd, 1e-5));
+  let signal = 'HOLD';
+
+  if (isRisky) {
+    signal = (st.probUp >= 0.60 && gain >= 4.0) ? 'RISK_BUY' : 'RISK';
+  } else if (st.probUp >= 0.65 && st.finalRetMedian >= 2.0 && gain >= 5.0 && rr >= 1.5) {
+    signal = 'STRONG_BUY';
+  } else if (st.probUp >= 0.55 && st.finalRetMedian >= 1.0 && gain >= 2.5) {
+    signal = 'BUY';
+  } else if (st.probUp <= 0.35 && st.finalRetMedian <= -2.0) {
+    signal = 'SELL';
+  } else if (st.probLoss7 >= 0.40) {
+    signal = 'RISK';
+  }
+
+  return { signal, rr: round(rr, 2) };
+}
+
 
 // ---------- Lưu dự báo AI để đối chiếu sau ----------
 let store = null;

@@ -31,6 +31,41 @@ const PRICE_SOURCES = [
   },
 ];
 
+// Phiên khớp lệnh liên tục + ATC của HOSE theo giờ Việt Nam (phút trong ngày): 9:00–11:30 và 13:00–14:45
+const SESSIONS = [[540, 690], [780, 885]];
+const SESSION_MIN = SESSIONS.reduce((s, [a, b]) => s + b - a, 0);
+const SETTLE_MIN = 900; // sau 15:00 coi nến ngày đã chốt
+
+/**
+ * Tiến độ phiên hôm nay theo giờ Việt Nam: { date, progress 0..1, closed }. closed = đã qua 15:00 (nến ngày đã chốt).
+ */
+export function sessionProgress(now = new Date()) {
+  const vn = new Date(now.getTime() + 7 * 3600_000);
+  const m = vn.getUTCHours() * 60 + vn.getUTCMinutes();
+  const done = SESSIONS.reduce((s, [a, b]) => s + Math.max(0, Math.min(m, b) - a), 0);
+  return { date: vn.toISOString().slice(0, 10), progress: done / SESSION_MIN, closed: m >= SETTLE_MIN };
+}
+
+/**
+ * Đánh dấu nến cuối là nến TRONG PHIÊN (chưa chốt) nếu là ngày hôm nay và chưa qua 15:00: khối lượng mới là một phần
+ * của cả phiên, không được so trực tiếp với khối lượng các phiên trước. Gắn `partial: true` và `progress` (0..1).
+ */
+export function markPartial(bars, now = new Date()) {
+  const last = bars?.at(-1);
+  if (!last) return bars;
+  const s = sessionProgress(now);
+  if (last.time === s.date && !s.closed) {
+    last.partial = true;
+    last.progress = s.progress;
+  }
+  return bars;
+}
+
+/** Khối lượng cả phiên ước tính từ nến trong phiên (tuyến tính theo thời gian, sàn 25% để tránh phóng đại đầu phiên). */
+export function projectedVolume(bar) {
+  return bar.partial ? bar.volume / Math.max(0.25, bar.progress ?? 1) : bar.volume;
+}
+
 /**
  * Giá ngày (đơn vị nghìn đồng với cổ phiếu, điểm với chỉ số) của ~1,5 năm gần nhất.
  * Thử lần lượt các nguồn, nguồn đầu tiên trả dữ liệu hợp lệ sẽ được dùng.
@@ -47,7 +82,7 @@ export function getPriceHistory(symbol, days = 550) {
         // bỏ đi để không phân tích/chụp bằng giá phiên trước.
         const last = bars?.at(-1);
         if (bars?.length > 1 && !last.volume && last.high === last.low) bars.pop();
-        if (bars && bars.length) return { source: src.name, bars };
+        if (bars && bars.length) return { source: src.name, bars: markPartial(bars) };
         errors.push(`${src.name}: không có dữ liệu`);
       } catch (err) {
         errors.push(`${src.name}: ${err.message}`);
@@ -120,6 +155,14 @@ export function getForeignFlow(symbol, days = 20) {
 export const FLOORS = ['HOSE', 'HNX', 'UPCOM'];
 
 /**
+ * Mã hủy niêm yết (dùng khi backtest và khi chấm dự đoán): thoát ở giá đóng cửa cuối cùng trừ đi tỷ lệ này. Thận trọng
+ * vì ở Việt Nam mã bị hủy niêm yết bắt buộc thường mất thanh khoản và giảm sâu khi chuyển sang UPCoM.
+ */
+export const DELIST_HAIRCUT = 0.3;
+// Hết dữ liệu giá ít nhất bấy nhiêu phiên (và không giao dịch lại) mới coi là hủy niêm yết, tránh nhầm với nguồn trễ
+export const DELIST_GAP = 5;
+
+/**
  * Tiêu chí chọn cổ phiếu cho bộ lọc tiềm năng và bảng xếp hạng (đổi trong .env):
  *  SCREEN_FLOORS    sàn được xét, mặc định HOSE (vd "HOSE,HNX")
  *  SCREEN_MIN_VALUE giá trị khớp lệnh trung bình 20 phiên tối thiểu, mặc định 5 tỷ đồng
@@ -147,6 +190,21 @@ export function getScreenUniverse() {
   return cached(`universe:${floors.join(',')}:${minValue}`, 6 * HOUR, async () => {
     const { bars } = await getPriceHistory('VNINDEX', 550);
     const date = bars.at(-1)?.time;
+    const lists = await Promise.all(floors.map((floor) => fetchJson(
+      `${FINFO}/stock_prices?q=date:${date}~floor:${floor}~type:STOCK~nmValue:gte:${Math.round(minValue / 5)}&size=1000&fields=code,floor`,
+    ).then((r) => r.data || [])));
+    return lists.flat().filter((d) => /^[A-Z0-9]{3}$/.test(d.code)).map((d) => ({ symbol: d.code, exchange: d.floor }));
+  });
+}
+
+/**
+ * Rổ ứng viên TẠI MỘT NGÀY trong quá khứ (sàn, khớp lệnh phiên đó ≥ 1/5 ngưỡng), dùng cho backtest để tránh thiên lệch
+ * sống sót: gồm cả mã sau này bị hủy niêm yết / chuyển sàn / cạn thanh khoản. Sàn trả về là sàn tại ngày đó.
+ * Ngày không có phiên (nghỉ lễ) trả mảng rỗng.
+ */
+export function getUniverseAt(date) {
+  const { floors, minValue } = screenCriteria();
+  return cached(`universe-at:${date}:${floors.join(',')}:${minValue}`, 24 * HOUR, async () => {
     const lists = await Promise.all(floors.map((floor) => fetchJson(
       `${FINFO}/stock_prices?q=date:${date}~floor:${floor}~type:STOCK~nmValue:gte:${Math.round(minValue / 5)}&size=1000&fields=code,floor`,
     ).then((r) => r.data || [])));

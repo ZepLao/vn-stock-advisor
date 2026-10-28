@@ -13,6 +13,8 @@ import { aiPickStocks } from './ai.js';
 import { rankSymbol } from './ranking.js';
 import { recordMany } from './predictions.js';
 import { getSectorFlows } from './sectors.js';
+import { detectStockRisk } from './risk.js';
+import { sma } from './indicators.js';
 
 // ---------- Tiêu chí "cổ ngon" (cơ bản doanh nghiệp) và thanh khoản đều ----------
 export const QUALITY_RULES = { minRoe: 0.12, minProfitGrowth: 0, maxPe: 25, maxDebtToEquity: 1.5 };
@@ -105,12 +107,119 @@ async function load() {
   try { state.result = JSON.parse(await readFile(FILE, 'utf8')); } catch { /* chưa có kết quả */ }
 }
 
+/**
+ * Nhận diện mẫu hình VCP (Volatility Contraction Pattern - Mark Minervini)
+ * Yêu cầu:
+ * - 2 đến 4 đợt co hẹp dao động (Contractions) liên tiếp trong 30-70 phiên
+ * - Mỗi đợt co hẹp có biên độ dao động (%) nhỏ hơn đợt trước (ví dụ 15-25% -> 7-12% -> 2-5%)
+ * - Thanh khoản 5 phiên gần nhất cạn kiệt (TB5 volume <= 0.75 TB20 volume)
+ * - Giá đóng cửa hiện tại nằm ở nửa trên của vùng tích lũy (>= 0.65 từ đáy đến đỉnh của nền)
+ */
+export function detectVcpPattern(bars) {
+  if (!bars || bars.length < 40) return { isVcp: false };
+  const recent = bars.slice(-60);
+  const closes = recent.map((b) => b.close);
+  const highs = recent.map((b) => b.high);
+  const lows = recent.map((b) => b.low);
+  const vols = recent.map((b) => b.volume);
+
+  const maxH = Math.max(...highs);
+  const minL = Math.min(...lows);
+  const lastClose = closes.at(-1);
+
+  // Phải ở nửa trên của nền giá tích lũy
+  if (maxH === minL || (lastClose - minL) / (maxH - minL) < 0.65) {
+    return { isVcp: false };
+  }
+
+  // Khối lượng cạn kiệt 5 phiên gần nhất so với 20 phiên
+  const vol5 = vols.slice(-5).reduce((a, b) => a + b, 0) / 5;
+  const vol20 = vols.slice(-20).reduce((a, b) => a + b, 0) / 20;
+  const volDryRatio = vol20 > 0 ? vol5 / vol20 : 1;
+  const volDryUp = volDryRatio <= 0.75;
+
+  // Chia 60 phiên thành 3 khoảng để đo độ co hẹp biên độ
+  const len = recent.length;
+  const c1Bars = recent.slice(0, Math.floor(len * 0.45));
+  const c2Bars = recent.slice(Math.floor(len * 0.45), Math.floor(len * 0.8));
+  const c3Bars = recent.slice(Math.floor(len * 0.8));
+
+  const rangePct = (bList) => {
+    if (!bList.length) return 0;
+    const h = Math.max(...bList.map((b) => b.high));
+    const l = Math.min(...bList.map((b) => b.low));
+    return l > 0 ? Math.round(((h - l) / l) * 1000) / 10 : 0;
+  };
+
+  const r1 = rangePct(c1Bars);
+  const r2 = rangePct(c2Bars);
+  const r3 = rangePct(c3Bars);
+
+  // Mẫu hình co hẹp: r1 > r2 > r3 và r3 < 8.5%
+  const contracting = r1 > r2 && r2 > r3 && r3 <= 8.5 && r1 >= 10;
+  const isVcp = contracting && volDryUp;
+
+  return {
+    isVcp,
+    contractions: [r1, r2, r3],
+    volDryRatio: Math.round(volDryRatio * 100) / 100,
+    volDryUp,
+    qualityScore: isVcp ? (volDryRatio < 0.5 ? 90 : 80) : 0,
+  };
+}
+
+/**
+ * Nhận diện Pocket Pivot (Gil Morales & Chris Kacher):
+ * Điểm mua gom sớm trước khi bứt phá:
+ * - Khối lượng phiên tăng hôm nay > khối lượng phiên giảm lớn nhất trong 10 phiên trước đó.
+ * - Giá đóng cửa tăng và nằm trên hoặc chớm bứt phá MA10/MA50.
+ */
+export function detectPocketPivot(bars) {
+  if (!bars || bars.length < 15) return { isPocketPivot: false };
+  const n = bars.length;
+  const last = bars[n - 1];
+  const prev = bars[n - 2];
+  if (last.close <= prev.close) return { isPocketPivot: false };
+
+  const last10 = bars.slice(n - 11, n - 1);
+  const downBars = last10.filter((b, idx) => {
+    const prior = idx === 0 ? bars[n - 12] : last10[idx - 1];
+    return prior ? b.close < prior.close : false;
+  });
+
+  const maxDownVol = downBars.length ? Math.max(...downBars.map((b) => b.volume)) : 0;
+  const isHigherThanDowns = maxDownVol > 0 && last.volume > maxDownVol;
+
+  const closes = bars.map((b) => b.close);
+  const ma10 = sma(closes, 10).at(-1);
+  const ma50 = sma(closes, 50).at(-1);
+  const nearKeyMa = (ma10 && last.close >= ma10 * 0.99) || (ma50 && last.close >= ma50 * 0.99);
+
+  const isPocketPivot = isHigherThanDowns && nearKeyMa;
+  const volRatio = maxDownVol > 0 ? Math.round((last.volume / maxDownVol) * 100) / 100 : 1;
+
+  return {
+    isPocketPivot,
+    maxDownVol,
+    volRatio,
+    reason: isPocketPivot
+      ? `Khối lượng phiên tăng vượt cây nến giảm lớn nhất 10 phiên (${volRatio}×), chớm bứt phá MA hỗ trợ`
+      : null,
+  };
+}
+
 /** Nhận diện kiểu cơ hội mua từ các chỉ báo đã tính. */
-export function detectSetups({ close, changePct, i, plan, faScore, flow }) {
+export function detectSetups({ close, changePct, i, plan, faScore, flow, vcp = null, pocketPivot = null }) {
   const s = [];
   const add = (id, label, desc) => s.push({ id, label, desc });
   const upStructure = i.sma50 != null && close > i.sma50 && (i.sma200 == null || i.sma50 > i.sma200);
 
+  if (vcp?.isVcp) {
+    add('vcp', 'Mẫu hình VCP', `Độ biến động thu hẹp ${vcp.contractions.join('% → ')}%, KL cạn kiệt ${(vcp.volDryRatio * 100).toFixed(0)}% TB20`);
+  }
+  if (pocketPivot?.isPocketPivot) {
+    add('pocket_pivot', 'Pocket Pivot', pocketPivot.reason);
+  }
   if (plan && close >= plan.resistance * 0.985 && i.avgVolume20 && i.volume >= 1.5 * i.avgVolume20 && changePct > 0) {
     add('breakout', 'Bứt phá', `Giá sát/vượt đỉnh 20 phiên ${plan.resistance} với khối lượng gấp ${(i.volume / i.avgVolume20).toFixed(1)} lần TB20`);
   }
@@ -155,7 +264,13 @@ async function quickScan(item, ctx) {
   const quality = qualityCheck(fund, sec?.name || '');
   const sector = sec ? { ...sec, ...sectorCheck(sec) } : { ...sectorCheck(null) };
 
-  const setups = detectSetups({ close, changePct, i, plan: tech.plan, faScore: fa.score ?? 0, flow: tech.flow });
+  // Nhận diện mẫu hình VCP & Pocket Pivot
+  const vcp = detectVcpPattern(bars);
+  const pocketPivot = detectPocketPivot(bars);
+
+  const setups = detectSetups({ close, changePct, i, plan: tech.plan, faScore: fa.score ?? 0, flow: tech.flow, vcp, pocketPivot });
+  // Quét nhanh rủi ro rơi tự do / thủng sâu MA50 (phương pháp Laban)
+  const stockRisk = detectStockRisk(bars, item.symbol);
   // Tiêu chí chính: điểm xếp hạng 4 yếu tố (đã kiểm chứng). Chỉ nhóm ≥ 70 và trên MA200 thắng VN-Index ổn định,
   // nên chỉ những mã đó được đưa vào vòng phân tích sâu. Điểm kỹ thuật/cơ bản cũ chỉ để hiển thị.
   const rank = await rankSymbol(item.symbol, bars).catch(() => null);
@@ -164,6 +279,10 @@ async function quickScan(item, ctx) {
     symbol: item.symbol, exchange: item.exchange, close, changePct,
     quick: Math.round(quick), technical: tech.score, fundamental: fa.score, setups, avgValue20,
     rankScore: rank?.score ?? null, aboveMa200: rank?.aboveMa200 ?? null,
+    stockRisk,
+    trendPick: rank?.trendPick ?? false,
+    vcp,
+    pocketPivot,
     liquidity, quality, sector,
     // Xếp hạng chung: nửa điểm xu hướng (xếp hạng 4 yếu tố) + nửa điểm chất lượng doanh nghiệp
     combined: quick != null && quality.score != null ? Math.round((quick + quality.score) / 2) : null,
@@ -237,8 +356,8 @@ async function run() {
   const scanned = await pool(uni, (it) => quickScan(it, ctx), () => state.progress.done++);
 
   // Bước 2
-  // Bắt buộc: thanh khoản đều + cổ ngon + xu hướng (điểm xếp hạng ≥ 70, trên MA200); xếp theo điểm chung
-  const trendOk = (c) => c.quick != null && c.quick >= 70 && c.aboveMa200 !== false;
+  // Bắt buộc: thanh khoản đều + cổ ngon + xu hướng (điểm xếp hạng ≥ 70, trên MA200) + KHÔNG có rủi ro rơi tự do
+  const trendOk = (c) => c.quick != null && c.quick >= 70 && c.aboveMa200 !== false && !c.stockRisk?.isRisky;
   const funnel = {
     scanned: scanned.length,
     liquidity: scanned.filter((c) => c.liquidity.pass).length,
@@ -248,7 +367,7 @@ async function run() {
   };
   const shortlist = scanned
     .filter((c) => c.liquidity.pass && c.quality.pass && c.sector.pass && trendOk(c))
-    .sort((a, b) => b.combined - a.combined)
+    .sort((a, b) => (b.combined + (b.trendPick ? 5 : 0)) - (a.combined + (a.trendPick ? 5 : 0)))
     .slice(0, STAGE2_SIZE);
   state.progress = { stage: 2, label: 'Phân tích sâu nhóm dẫn đầu (kèm tin tức)', done: 0, total: shortlist.length };
   let marketFlow = null;
@@ -262,6 +381,9 @@ async function run() {
       close: a.price.close, changePct: a.price.changePct, date: a.price.date,
       setups: c.setups, quick: c.quick, avgValue20: c.avgValue20,
       liquidity: c.liquidity, quality: withEarnings(qualityCheck(a.fundamental.data, c.sector?.name || ''), a.company?.earnings), sector: c.sector, combined: c.combined,
+      trendPick: a.trendPick ?? c.trendPick ?? false,
+      stockRisk: a.stockRisk ?? c.stockRisk ?? null,
+      monteCarlo: a.monteCarlo ? { probUp: a.monteCarlo.probUp, rr: a.monteCarlo.rr, signal: a.monteCarlo.signal, peakGain: a.monteCarlo.peakGainMedian, troughDd: a.monteCarlo.troughDdMedian } : null,
       earnings: a.company?.earnings ? (({ quarters, ...rest }) => ({ ...rest, quarters: quarters.slice(-5).map(({ label, profit, profitYoY, revenueYoY }) => ({ label, profit, profitYoY, revenueYoY })) }))(a.company.earnings) : null,
       valuation: a.company?.valuation ? { verdict: a.company.valuation.verdict, pePct: a.company.valuation.pe?.percentile ?? null, peMedian: a.company.valuation.pe?.median ?? null } : null,
       upcomingEvents: (a.company?.events?.upcoming || []).slice(0, 3).map((x) => `${x.date} ${x.label}: ${x.note}`),
@@ -277,7 +399,7 @@ async function run() {
 
   const final = detailed
     .filter((c) => c.quality.pass)
-    .sort((a, b) => (b.combined ?? 0) - (a.combined ?? 0))
+    .sort((a, b) => ((b.combined ?? 0) + (b.trendPick ? 5 : 0)) - ((a.combined ?? 0) + (a.trendPick ? 5 : 0)))
     .slice(0, FINAL_SIZE);
 
   // Bước 3
@@ -293,7 +415,7 @@ async function run() {
     const close = new Map(final.map((c) => [c.symbol, c]));
     recordMany(ai.picks.map((p) => ({
       source: 'screener', symbol: p.symbol, date: close.get(p.symbol)?.date || date, direction: PICK_DIRECTION[p.verdict],
-      label: p.verdictLabel, price: close.get(p.symbol)?.close, detail: `Tin cậy ${p.confidence}%`,
+      label: p.verdictLabel, price: close.get(p.symbol)?.close, detail: `Tin cậy ${p.confidence}%`, confidence: p.confidence,
     })));
   }
 
@@ -353,7 +475,7 @@ export async function rerunScreenerAi() {
       const byS = new Map(r.candidates.map((c) => [c.symbol, c]));
       recordMany((ai?.picks || []).map((p) => ({
         source: 'screener', symbol: p.symbol, date: byS.get(p.symbol)?.date || r.date, direction: PICK_DIRECTION[p.verdict],
-        label: p.verdictLabel, price: byS.get(p.symbol)?.close, detail: `Tin cậy ${p.confidence}%`,
+        label: p.verdictLabel, price: byS.get(p.symbol)?.close, detail: `Tin cậy ${p.confidence}%`, confidence: p.confidence,
       })));
       await writeFile(FILE, JSON.stringify(r, null, 2), 'utf8');
     });

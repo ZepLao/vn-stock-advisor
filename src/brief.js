@@ -1,25 +1,18 @@
 // Tóm tắt nhanh cho một mã: kết luận, việc nên làm, 4-5 lý do ngắn có số liệu, mức giá và rủi ro.
 // Dựng hoàn toàn từ dữ liệu đã tính (không cần AI) để đọc lướt là hiểu.
-import { priceLevels, tradeSteps } from './tradeplan.js';
+import { priceLevels, tradeSteps, holderStop } from './tradeplan.js';
 import { getTuning } from './tuning.js';
+import { positionSize } from './sizing.js';
+
+export { positionSize };
 
 const pct = (v, d = 0) => (v == null || !Number.isFinite(v) ? '–' : `${v > 0 ? '+' : ''}${(v * 100).toLocaleString('vi-VN', { minimumFractionDigits: d, maximumFractionDigits: d })}%`);
 const ty = (v) => (v == null ? '–' : `${v > 0 ? '+' : ''}${(v / 1e9).toLocaleString('vi-VN', { maximumFractionDigits: Math.abs(v) >= 1e11 ? 0 : 1 })} tỷ`);
 const num = (v, d = 1) => (v == null || !Number.isFinite(v) ? '–' : v.toLocaleString('vi-VN', { maximumFractionDigits: d }));
 
-/**
- * Tỷ trọng gợi ý theo rủi ro: mỗi lệnh chỉ chấp nhận mất tối đa 1% tổng vốn nếu chạm cắt lỗ,
- * giới hạn 25% vốn/mã. Khoảng cách cắt lỗ càng xa (mã biến động mạnh) thì mua càng ít.
- */
-export function positionSize(close, stopLoss, { riskPerTrade = 0.01, cap = 0.25 } = {}) {
-  if (!close || !stopLoss || stopLoss >= close) return null;
-  const dist = (close - stopLoss) / close;
-  return { stopDistance: dist, weight: Math.round(Math.min(cap, riskPerTrade / dist) * 100) / 100 };
-}
-
 const ACTIONS = {
-  BUY: (l) => `Có thể mua, tối đa ${l.size} vốn; cắt lỗ nếu đóng cửa dưới ${l.stop}.`,
-  ACCUMULATE: (l) => `Chỉ mua thăm dò, tối đa ${l.half} vốn; cắt lỗ dưới ${l.stop}.`,
+  BUY: (l) => (l.blocked ? `Tín hiệu mua nhưng không mở vị thế mới: ${l.blocked}.` : `Có thể mua, tối đa ${l.size} vốn; cắt lỗ nếu đóng cửa dưới ${l.stop}.`),
+  ACCUMULATE: (l) => (l.blocked ? `Tín hiệu mua thăm dò nhưng không mở vị thế mới: ${l.blocked}.` : `Chỉ mua thăm dò, tối đa ${l.half} vốn; cắt lỗ dưới ${l.stop}.`),
   HOLD: (l) => `Chưa mua mới. Đang có thì giữ, bán nếu đóng cửa dưới ${l.stop}.`,
   AVOID: (l) => `Không mua mới. Đang có thì cân nhắc giảm, nhất là khi thủng ${l.stop}.`,
   SELL: () => 'Không mua. Đang có nên hạ tỷ trọng.',
@@ -100,8 +93,9 @@ export function playbook(code, c) {
  * @param {object} a kết quả analyzeSymbol (không phải chỉ số)
  * @param {{ name: string, net: number, rank: number, total: number, period: number }|null} sector dòng tiền ngành
  * @param {object|null} holding vị thế đang nắm giữ (từ Danh mục)
+ * @param {{ capital?: number|null, heat?: number|null, sector?: object|null }|null} risk ngữ cảnh định cỡ vị thế (sizing.js)
  */
-export function buildBrief(a, sector = null, holding = null, bars = null) {
+export function buildBrief(a, sector = null, holding = null, bars = null, risk = null) {
   const r = a.ranking;
   const i = a.technical.indicators;
   const f = a.fundamental.data || {};
@@ -150,10 +144,11 @@ export function buildBrief(a, sector = null, holding = null, bars = null) {
   const L = bars?.length >= 60
     ? priceLevels(bars, { atr: i.atr14, ma20: i.sma20, ma50: i.sma50, ma200: i.sma200, minStopAtr: getTuning().minStopAtr })
     : p ? { r2: p.target, r1: p.resistance, close, s1: p.support, s2: null, stop: p.stopLoss, atr: i.atr14 || close * 0.02 } : null;
-  const size = L ? positionSize(close, L.stop) : null;
+  const size = L ? positionSize(close, L.stop, { bars, value20: a.value20, ...(risk || {}) }) : null;
+  const holdStop = holding?.avgCost && bars?.length >= 60 ? holderStop(bars, holding, { minStopAtr: getTuning().minStopAtr }) : null;
   const steps = L ? tradeSteps(a.recommendation.code, L, {
     weight: size?.weight ?? 0.1, rsi: i.rsi14, avgVol20: i.avgVolume20, ma200: i.sma200,
-    score: r?.score, aboveMa200: r?.aboveMa200, holding,
+    score: r?.score, aboveMa200: r?.aboveMa200, holding, holdStop,
   }) : null;
   const firstBuy = steps?.fresh.find((x) => x.side === 'buy' && x.zone);
   const levels = L ? {
@@ -168,10 +163,13 @@ export function buildBrief(a, sector = null, holding = null, bars = null) {
       };
     })(),
     weight: size?.weight ?? null,
+    holdStop,
+    sizing: size ? { effectiveLoss: size.effectiveLoss, tail: size.tail, binding: size.binding, limits: size.limits, capitalKnown: risk?.capital > 0 } : null,
   } : null;
   const fmtLv = {
     size: size ? `${Math.round(size.weight * 100)}%` : '10%', half: size ? `${Math.max(1, Math.round(size.weight * 50))}%` : '5%',
     stop: L ? num(L.stop, 2) : 'mức hỗ trợ gần nhất',
+    blocked: size?.weight === 0 ? size.limits.find((x) => x.key === size.binding)?.text : null,
   };
   const action = (ACTIONS[a.recommendation.code] || ACTIONS.HOLD)(fmtLv);
   const plays = levels ? playbook(a.recommendation.code, {
@@ -202,7 +200,9 @@ export function buildBrief(a, sector = null, holding = null, bars = null) {
 
 /** Câu hành động chính cho một mức khuyến nghị (dùng lại khi AI thẩm định đổi mức). */
 export function actionFor(code, levels) {
+  const bind = levels?.weight === 0 ? levels.sizing?.limits?.find((x) => x.key === levels.sizing.binding) : null;
   const fmtLv = {
+    blocked: bind?.text ?? null,
     size: levels?.weight != null ? `${Math.round(levels.weight * 100)}%` : '10%',
     half: levels?.weight != null ? `${Math.max(1, Math.round(levels.weight * 50))}%` : '5%',
     stop: levels ? num(levels.stop, 2) : 'mức hỗ trợ gần nhất',

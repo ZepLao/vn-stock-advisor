@@ -28,6 +28,12 @@ test('Quyết định cuối: kế hoạch mua/bán tính lại theo mức đã 
   assert.match(f.note, /AI hạ từ NÊN MUA xuống CHƯA NÊN MUA \(yếu tố xấu: xu hướng vn-index\)/);
   assert.equal(f.steps.fresh[0].side, 'wait'); // không còn bước mua ngay
   assert.match(f.action, /Không mua mới/);
+
+  // Giá bị ghim (NAF 10/2026): hệ thống và AI cùng mua vẫn chỉ được GIỮ
+  const pinned = Array.from({ length: 20 }, () => ({ high: 48.1, low: 47.8, close: 48 }));
+  const g = finalDecision({ ...a, recentBars: pinned }, { ...ai, decision: 'MUA', marketChecks: [] });
+  assert.equal(g.code, 'HOLD');
+  assert.match(g.note, /bị ghim/);
 });
 
 test('Kế hoạch người đang nắm giữ: chặn mua thêm khi quyết định cuối không phải mua', async () => {

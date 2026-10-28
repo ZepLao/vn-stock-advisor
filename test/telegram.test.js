@@ -29,7 +29,7 @@ test('Tách tin dài theo dòng, mỗi phần không quá giới hạn', () => {
 
 test('Dòng mã đang giữ: thoát ký tự < cho HTML của Telegram, nâng cắt lỗ khi lãi ≥ 10%', () => {
   const a = (close, pnlPct) => ({ symbol: 'VTP', price: { close }, holding: { avgCost: 46.8, pnlPct }, brief: { code: 'HOLD', levels: { stop: 42.6, target: 52 } } });
-  assert.equal(holdingLine(a(47.35, 0.008)), `▸ <b>VTP</b>  <b>47,35</b>  lãi +0,8%\n${IND}Giữ · cắt &lt; 42,6`);
+  assert.equal(holdingLine(a(47.35, 0.008)), '▸ <b>VTP</b>  <b>47,35</b> (lãi <b>+0,8%</b>)\n  👉 🟢 Giữ · cắt &lt; 42,6');
   assert.match(holdingLine(a(51.5, 0.1)), /cắt &lt; 46,8/);
   assert.match(holdingLine(a(42, -0.1)), /BÁN<\/b> \(thủng 42,6\)/);
   // Quyết định cuối sau AI được ưu tiên hơn khuyến nghị hệ thống
@@ -40,10 +40,9 @@ test('Dòng mã đang giữ: thoát ký tự < cho HTML của Telegram, nâng c�
 test('Dòng mã mua: 2 dòng gọn, ngành + thăm dò, vùng mua / chờ giá, % tới chốt và cắt', () => {
   const a = (close) => ({ symbol: 'DHC', price: { close }, sector: { name: 'Sản xuất giấy' }, brief: { levels: { buyFrom: 38.25, buyTo: 38.8, stop: 35.75, target: 42 } } });
   assert.equal(buyLine(a(38.8), { code: 'ACCUMULATE' }), [
-    '▸ <b>DHC</b>  <b>38,8</b>',
-    `${IND}<i>Sản xuất giấy · thăm dò</i>`,
-    `${IND}Mua <b>38,25–38,8</b>`,
-    `${IND}Chốt 42 (+8%) · Cắt 35,75 (−8%)`,
+    '▸ <b>DHC</b>  <b>38,8</b> · <i>Sản xuất giấy · thăm dò</i>',
+    '  🎯 Mua <b>38,25–38,8</b>',
+    '  🚀 Chốt 42 (+8%) · 🛡️ Cắt 35,75 (−8%)',
   ].join('\n'));
   assert.match(buyLine(a(40), { code: 'BUY' }), /Chờ về <b>38,25–38,8<\/b>/);
   assert.equal(zoneState(38.5, a(0).brief.levels), 'buy');
@@ -52,7 +51,7 @@ test('Dòng mã mua: 2 dòng gọn, ngành + thăm dò, vùng mua / chờ giá, 
 
 test('VN-Index: nói rõ là xu hướng trung hạn', () => {
   assert.equal(marketLine({ close: 1738.67, changePct: 2.76, trend: 'down', aboveMa200: true }),
-    'VN-Index <b>1.739</b> ▲2,76% · xu hướng trung hạn còn yếu → mua từng phần');
+    '📊 VN-Index <b>1.739</b> ▲2,76% · xu hướng trung hạn còn yếu → mua từng phần');
 });
 
 test('Trạng thái so với vùng mua', () => {

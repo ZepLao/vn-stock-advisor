@@ -2492,6 +2492,175 @@ body.focus-mode .detail-only { display: none !important; }
 .bf-holdview { color: var(--ink-2); }
 .bf-noadd { margin: 0; padding-left: 18px; color: var(--down-text); font-size: 12.5px; }
 
+/* 4 Key Metrics Bar in Brief Card */
+.bf-key-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin: 6px 0 2px;
+}
+.bf-metric-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  transition: var(--transition);
+}
+.bf-metric-card:hover {
+  border-color: var(--border-light);
+  transform: translateY(-1px);
+}
+.bf-metric-card .m-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.bf-metric-card .m-val {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.bf-metric-card .m-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+.bf-metric-card.up .m-val { color: var(--up-text); }
+.bf-metric-card.down .m-val { color: var(--down-text); }
+.bf-metric-card.accent .m-val { color: var(--accent); }
+
+/* Collapsible Deep Details in Brief Card */
+.bf-deep-details {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  margin-top: 6px;
+  background: rgba(255, 255, 255, 0.015);
+}
+.bf-deep-toggle {
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 3px 0;
+  user-select: none;
+}
+.bf-deep-toggle:hover {
+  color: var(--accent-hover);
+}
+.bf-deep-content {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Deep Dive Accordion (Full Data & AI Reasoning Drawer) */
+.deep-dive-panel {
+  margin-top: 18px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.deep-dive-summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 14px 18px;
+  background: var(--surface-2);
+  border-bottom: 1px solid transparent;
+  transition: var(--transition);
+}
+.deep-dive-summary::-webkit-details-marker {
+  display: none;
+}
+.deep-dive-panel[open] .deep-dive-summary {
+  border-bottom-color: var(--border);
+}
+.deep-dive-summary:hover {
+  background: var(--surface-3);
+}
+.deep-dive-summary-content {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.deep-dive-icon {
+  font-size: 24px;
+  flex-shrink: 0;
+}
+.deep-dive-text {
+  flex: 1;
+  min-width: 0;
+}
+.deep-dive-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.deep-dive-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.deep-dive-toggle-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 5px 12px;
+  border-radius: var(--radius-full);
+  background: var(--accent-bg);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.deep-dive-body {
+  padding: 16px;
+}
+
+/* Potential Picks Collapsible Elements */
+.pk-method-wrap {
+  margin-bottom: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+}
+.pk-method-toggle {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--muted);
+  user-select: none;
+}
+.pk-method-toggle:hover {
+  color: var(--ink);
+}
+.pk-details-drawer {
+  margin-top: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border);
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.015);
+}
+.pk-details-toggle {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.pk-details-toggle:hover {
+  color: var(--accent);
+}
+.pk-drawer-content {
+  margin-top: 8px;
+}
+
 /* Kế hoạch mua – bán từng bước */
 .bf-capbox { border: 1px solid var(--border, var(--surface-3)); border-radius: var(--radius-sm); padding: 10px 12px; margin: 10px 0; background: var(--surface-2); display: grid; gap: 8px; }
 .cap-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }

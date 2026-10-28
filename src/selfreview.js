@@ -3,7 +3,12 @@
 //
 // Rào chắn chống "học theo nhiễu":
 //  - chỉ dùng lệnh đã đủ phiên (đã chạm cắt lỗ / chốt lời hoặc đủ 20 phiên), cần ≥ MIN_SAMPLE lệnh;
-//  - mỗi lần chỉnh một bước nhỏ, kẹp trong giới hạn BOUNDS; mỗi thông số tối đa 1 lần / COOLDOWN phiên;
+//  - mỗi bằng chứng quy về MỘT GIÁ TRỊ MỖI PHIÊN rồi kiểm định bằng t Newey-West (verify.js) vì các lệnh cùng phiên /
+//    phiên liền nhau không độc lập. Thay đổi làm TĂNG rủi ro hoặc rời mặc định (nới cắt lỗ, tắt AI loại mã, bỏ thận
+//    trọng, đổi dải giá) cần |t| ≥ 2 và ≥ minDates phiên; thay đổi QUAY VỀ phía thận trọng (bật thận trọng, bật lại
+//    AI loại mã) chỉ cần ước lượng điểm;
+//  - mỗi lần chỉnh một bước nhỏ, kẹp trong giới hạn BOUNDS; mỗi thông số tối đa 1 lần / COOLDOWN phiên; mỗi lần chỉnh
+//    là một phiên bản mô hình mới (tuning.js ghi băm thông số trước / sau);
 //  - không tự đổi chiến lược xếp hạng gốc (đã kiểm chứng 4 năm; ~40 biến thể thử nghiệm đều không vững hơn).
 // Mọi thay đổi được ghi nhật ký (data/tuning.json) và báo qua Telegram.
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -11,12 +16,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getPriceHistory } from './data.js';
 import { evaluatePredictions } from './predictions.js';
+import { testSeries } from './verify.js';
 import { getTuning, setParam, tuningLog } from './tuning.js';
 
 const DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const TRADES = join(DIR, 'trades.json');
 const REVIEWS = join(DIR, 'reviews.json');
-export const RULES = { minSample: 30, window: 60, cooldown: 5, hold: 20, minBand: 50 };
+export const RULES = { minSample: 30, minDates: 20, t: 2, window: 60, cooldown: 20, hold: 20, stopFloor: 0.15 };
 
 const readJson = (f, d) => readFile(f, 'utf8').then(JSON.parse).catch(() => d);
 async function writeJson(f, v) {
@@ -48,9 +54,10 @@ export async function recordTrades(list) {
 
 // ---------- Chấm ----------
 /**
- * Mô phỏng một lệnh mua ở giá `entry` phiên `date`: thoát khi giá thấp nhất chạm cắt lỗ (nếu mở cửa đã dưới cắt lỗ
- * thì bán giá mở cửa), khi giá cao nhất chạm chốt lời, hoặc đóng cửa phiên thứ `hold`. Cùng phiên chạm cả hai thì tính
- * cắt lỗ (thận trọng). Kèm lợi suất 10 / 20 phiên giữ nguyên (để biết cắt lỗ có bị "quét" rồi giá hồi không).
+ * Mô phỏng một lệnh mua ở giá `entry` phiên `date`, cùng luật với khuyến nghị: ĐÓNG CỬA dưới cắt lỗ thì bán giá mở cửa
+ * phiên sau (hết dữ liệu thì giá đóng cửa đó); giá cao nhất chạm chốt lời thì bán ở mức chốt lời (lệnh giới hạn, mở cửa
+ * vượt thì giá mở cửa); hoặc đóng cửa phiên thứ `hold`. Cùng phiên chạm chốt lời và đóng cửa dưới cắt lỗ thì tính cắt lỗ
+ * (thận trọng). Kèm lợi suất 10 / 20 phiên giữ nguyên (để biết cắt lỗ có bị "quét" rồi giá hồi không).
  */
 export function scoreTrade(t, bars, indexBars = [], hold = RULES.hold) {
   const i = bars.findIndex((b) => b.time === t.date);
@@ -61,7 +68,7 @@ export function scoreTrade(t, bars, indexBars = [], hold = RULES.hold) {
   let outcome = null, exit = null, days = null;
   for (let j = i + 1; j <= Math.min(i + hold, bars.length - 1); j++) {
     const b = bars[j];
-    if (t.stop && b.low <= t.stop) { outcome = 'stop'; exit = Math.min(b.open, t.stop); days = j - i; break; }
+    if (t.stop && b.close < t.stop) { outcome = 'stop'; exit = bars[j + 1]?.open ?? b.close; days = j - i; break; }
     if (t.target && b.high >= t.target) { outcome = 'target'; exit = Math.max(b.open, t.target); days = j - i; break; }
   }
   if (!outcome && i + hold < bars.length) { outcome = 'time'; exit = bars[i + hold].close; days = hold; }
@@ -107,48 +114,89 @@ async function bandCoverage(barsOf) {
       const i = bars.findIndex((b) => b.time === f.date);
       if (i < 0 || i + 5 >= bars.length) continue;
       const v = bars[i + 5].close, [lo, hi] = f.band.p5;
-      hits.push(v >= lo && v <= hi);
+      hits.push({ date: f.date, hit: v >= lo && v <= hi });
     }
   }
-  return { n: hits.length, coverage90: r(share(hits, Boolean), 3) };
+  return { n: hits.length, coverage90: r(share(hits, (x) => x.hit), 3), hits };
+}
+
+// Trung bình theo phiên của f(x) (bỏ null), theo thứ tự ngày
+function perDate(list, f) {
+  const m = new Map();
+  for (const x of list) {
+    const v = f(x);
+    if (v == null || !Number.isFinite(v)) continue;
+    if (!m.has(x.date)) m.set(x.date, []);
+    m.get(x.date).push(v);
+  }
+  return [...m].sort((a, b) => a[0].localeCompare(b[0])).map(([date, v]) => ({ date, value: avg(v) }));
+}
+
+/**
+ * Kiểm định cho từng quyết định chỉnh, mỗi bằng chứng là chuỗi một giá trị mỗi phiên (hàm thuần).
+ *  shake: lợi suất 20 phiên của lệnh bị cắt lỗ trong 5 phiên (> 0 = cắt lỗ bị quét rồi giá hồi);
+ *  stopLow: tỷ lệ chạm cắt lỗ − stopFloor (< 0 = cắt lỗ hiếm khi bị chạm);
+ *  veto: lãi hơn VN-Index 10 phiên của mã AI loại − mã AI chọn (> 0 = AI loại sai);
+ *  picks: lãi hơn VN-Index 10 phiên của mã gợi ý; band: dải 5–95% chứa giá thật − 90%.
+ * @param {object[]} scored lệnh đã chấm ({ date, status, s })
+ * @param {{ date: string, hit: boolean }[]} bandHits
+ */
+export function gateTests(scored, bandHits = [], rules = RULES) {
+  const R = { minDates: rules.minDates, t: rules.t };
+  const T = (series, lags) => testSeries(series.map((x) => x.value), lags, null, R);
+  const picks = scored.filter((x) => x.status === 'pick');
+  const matured = picks.filter((x) => x.s?.matured);
+  const pick10 = perDate(picks, (x) => x.s?.excess10);
+  const rej10 = new Map(perDate(scored.filter((x) => x.status === 'rejected'), (x) => x.s?.excess10).map((x) => [x.date, x.value]));
+  return {
+    shake: T(perDate(matured.filter((x) => x.s.outcome === 'stop' && x.s.days <= 5), (x) => x.s.ret20), rules.hold - 1),
+    stopLow: T(perDate(matured, (x) => (x.s.outcome === 'stop' ? 1 : 0) - rules.stopFloor), rules.hold - 1),
+    veto: T(pick10.filter((x) => rej10.has(x.date)).map((x) => ({ value: rej10.get(x.date) - x.value })), 9),
+    picks: T(pick10, 9),
+    band: T(perDate(bandHits, (x) => (x.hit ? 1 : 0) - 0.9), 4),
+  };
 }
 
 // ---------- Quyết định chỉnh ----------
 /**
- * Các thay đổi đề xuất từ số liệu (hàm thuần, dễ kiểm thử).
+ * Các thay đổi đề xuất từ số liệu và kiểm định (hàm thuần, dễ kiểm thử).
+ * @param {{ picks, picks10, rejected10, band }} st thống kê mô tả
+ * @param {ReturnType<typeof gateTests>} tests kiểm định theo phiên
  * @returns {{ name, value, reason, evidence }[]}
  */
-export function proposeChanges({ picks, picks10, rejected10, band }, t, rules = RULES) {
+export function proposeChanges({ picks, picks10, rejected10, band }, tests, t, rules = RULES) {
   const out = [];
-  if (picks.n >= rules.minSample) {
-    if (picks.stop5Rate > 0.45 && picks.shakeN >= 10 && picks.shakeAvgRet20 > 0) {
-      out.push({ name: 'minStopAtr', value: t.minStopAtr + 0.25, evidence: picks,
-        reason: `${Math.round(picks.stop5Rate * 100)}% lệnh chạm cắt lỗ trong 5 phiên nhưng sau 20 phiên giá các mã đó lại ${(picks.shakeAvgRet20 * 100).toFixed(1)}%: cắt lỗ quá sát, nới thêm 0,25 ATR` });
-    } else if (picks.stopRate < 0.15 && t.minStopAtr > 0) {
-      out.push({ name: 'minStopAtr', value: t.minStopAtr - 0.25, evidence: picks,
-        reason: `Chỉ ${Math.round(picks.stopRate * 100)}% lệnh chạm cắt lỗ: thu hẹp lại 0,25 ATR để giảm rủi ro mỗi lệnh` });
-    }
+  const ok = (x, sign) => x?.verdict === (sign > 0 ? 'supported' : 'rejected'); // |t| ≥ 2, đủ phiên, đúng chiều
+  const ev = (x) => ({ n: x?.n, mean: x?.mean, t: x?.t });
+  const bandEv = (x) => ({ band: { n: band.n, coverage90: band.coverage90 }, test: ev(x) });
+  if (picks.n >= rules.minSample && picks.stop5Rate > 0.45 && ok(tests.shake, 1)) {
+    out.push({ name: 'minStopAtr', value: t.minStopAtr + 0.25, evidence: { picks, test: ev(tests.shake) },
+      reason: `${Math.round(picks.stop5Rate * 100)}% lệnh chạm cắt lỗ trong 5 phiên nhưng sau 20 phiên giá các mã đó lại ${(tests.shake.mean * 100).toFixed(1)}% (t ${tests.shake.t}, ${tests.shake.n} phiên): cắt lỗ quá sát, nới thêm 0,25 ATR` });
+  } else if (t.minStopAtr > 0 && ok(tests.stopLow, -1)) {
+    out.push({ name: 'minStopAtr', value: t.minStopAtr - 0.25, evidence: { picks, test: ev(tests.stopLow) },
+      reason: `Chỉ ${Math.round(picks.stopRate * 100)}% lệnh chạm cắt lỗ (t ${tests.stopLow.t}, ${tests.stopLow.n} phiên): thu hẹp lại 0,25 ATR` });
   }
-  if (band.n >= rules.minBand) {
-    if (band.coverage90 < 0.85) out.push({ name: 'widen', value: t.widen * 1.04, evidence: band, reason: `Dải 5–95% chỉ chứa giá thật ${Math.round(band.coverage90 * 100)}% (chuẩn 90%): nới dải 4%` });
-    else if (band.coverage90 > 0.95) out.push({ name: 'widen', value: t.widen / 1.04, evidence: band, reason: `Dải 5–95% chứa giá thật ${Math.round(band.coverage90 * 100)}% (chuẩn 90%): dải quá rộng, thu hẹp 4%` });
+  if (ok(tests.band, -1)) {
+    out.push({ name: 'widen', value: t.widen * 1.04, evidence: bandEv(tests.band),
+      reason: `Dải 5–95% chỉ chứa giá thật ${Math.round((tests.band.mean + 0.9) * 100)}% (chuẩn 90%, t ${tests.band.t}): nới dải 4%` });
+  } else if (ok(tests.band, 1)) {
+    out.push({ name: 'widen', value: t.widen / 1.04, evidence: bandEv(tests.band),
+      reason: `Dải 5–95% chứa giá thật ${Math.round((tests.band.mean + 0.9) * 100)}% (chuẩn 90%, t ${tests.band.t}): dải quá rộng, thu hẹp 4%` });
   }
-  if (picks10.n >= rules.minSample && rejected10.n >= rules.minSample) {
-    const diff = rejected10.avgExcess10 - picks10.avgExcess10;
-    if (t.aiVeto && diff > 0.01) {
-      out.push({ name: 'aiVeto', value: false, evidence: { picks10, rejected10 },
-        reason: `Mã AI loại lại tốt hơn mã AI chọn ${(diff * 100).toFixed(1)}%/10 phiên: vẫn cho AI phân tích nhưng không loại mã, chỉ ghi chú` });
-    } else if (!t.aiVeto && diff < -0.01) {
-      out.push({ name: 'aiVeto', value: true, evidence: { picks10, rejected10 },
-        reason: `Mã AI chọn tốt hơn mã AI loại ${(-diff * 100).toFixed(1)}%/10 phiên: bật lại quyền loại mã của AI` });
-    }
+  if (t.aiVeto && ok(tests.veto, 1)) {
+    out.push({ name: 'aiVeto', value: false, evidence: { picks10, rejected10, test: ev(tests.veto) },
+      reason: `Mã AI loại lại tốt hơn mã AI chọn ${(tests.veto.mean * 100).toFixed(1)}%/10 phiên (t ${tests.veto.t}, ${tests.veto.n} phiên): vẫn cho AI phân tích nhưng không loại mã, chỉ ghi chú` });
+  } else if (!t.aiVeto && picks10.n >= rules.minSample && rejected10.n >= rules.minSample && rejected10.avgExcess10 - picks10.avgExcess10 < -0.01) {
+    // Quay về mặc định thận trọng: chỉ cần ước lượng điểm
+    out.push({ name: 'aiVeto', value: true, evidence: { picks10, rejected10 },
+      reason: `Mã AI chọn tốt hơn mã AI loại ${((picks10.avgExcess10 - rejected10.avgExcess10) * 100).toFixed(1)}%/10 phiên: bật lại quyền loại mã của AI` });
   }
-  if (picks10.n >= rules.minSample) {
-    if (!t.caution && picks10.avgExcess10 < -0.01) {
-      out.push({ name: 'caution', value: true, evidence: picks10, reason: `Gợi ý mua gần đây thua VN-Index ${(-picks10.avgExcess10 * 100).toFixed(1)}%/10 phiên: chỉ gợi ý 3 mã, kèm cảnh báo` });
-    } else if (t.caution && picks10.avgExcess10 > 0) {
-      out.push({ name: 'caution', value: false, evidence: picks10, reason: `Gợi ý mua đã vượt VN-Index trở lại (+${(picks10.avgExcess10 * 100).toFixed(1)}%/10 phiên): bỏ chế độ thận trọng` });
-    }
+  if (!t.caution && picks10.n >= rules.minSample && picks10.avgExcess10 < -0.01) {
+    out.push({ name: 'caution', value: true, evidence: picks10,
+      reason: `Gợi ý mua gần đây thua VN-Index ${(-picks10.avgExcess10 * 100).toFixed(1)}%/10 phiên: chỉ gợi ý 3 mã, kèm cảnh báo` });
+  } else if (t.caution && ok(tests.picks, 1)) {
+    out.push({ name: 'caution', value: false, evidence: { picks10, test: ev(tests.picks) },
+      reason: `Gợi ý mua vượt VN-Index +${(tests.picks.mean * 100).toFixed(1)}%/10 phiên có ý nghĩa (t ${tests.picks.t}, ${tests.picks.n} phiên): bỏ chế độ thận trọng` });
   }
   return out;
 }
@@ -189,7 +237,8 @@ export function runSelfReview({ apply = true } = {}) {
       .filter((s) => s.evaluated > 0);
 
     const t = getTuning();
-    const proposed = proposeChanges({ picks, picks10, rejected10, band }, t);
+    const tests = gateTests(scored, band.hits);
+    const proposed = proposeChanges({ picks, picks10, rejected10, band }, tests, t);
     const changes = [];
     for (const p of proposed) {
       const wait = RULES.cooldown - sessionsSince(p.name, sessions);
@@ -200,11 +249,15 @@ export function runSelfReview({ apply = true } = {}) {
 
     const review = {
       date, at: new Date().toISOString(), trades: { total: items.length, pending: scored.filter((x) => x.status === 'pick' && !x.s?.matured).length },
-      picks, picks10, rejected10, band, accuracy, changes, tuning: { ...getTuning() },
+      picks, picks10, rejected10, band: { n: band.n, coverage90: band.coverage90 }, accuracy, changes, tuning: { ...getTuning() },
+      tests: Object.fromEntries(Object.entries(tests).map(([k, x]) => [k, { n: x.n, mean: x.mean, t: x.t, verdict: x.verdict }])),
     };
-    const all = await readJson(REVIEWS, []);
-    all.push(review);
-    await writeJson(REVIEWS, all.slice(-250));
+    // Chạy thử (apply = false) không lưu: bản lưu ngày hôm nay sẽ làm lịch tự đánh giá bỏ qua lần chạy thật
+    if (apply) {
+      const all = await readJson(REVIEWS, []);
+      all.push(review);
+      await writeJson(REVIEWS, all.slice(-250));
+    }
     return review;
   })().finally(() => (running = null));
   return running;
@@ -229,12 +282,15 @@ export function formatReview(rv) {
   else L.push(`Gợi ý mua: chưa lệnh nào đủ 20 phiên (đang theo dõi ${rv.trades.pending})`);
   if (rv.picks10.n) L.push(`Sau 10 phiên so với VN-Index: AI chọn ${pc(rv.picks10.avgExcess10, 1)} (${rv.picks10.n})${rv.rejected10.n ? ` · AI loại ${pc(rv.rejected10.avgExcess10, 1)} (${rv.rejected10.n})` : ''}`);
   const acc = rv.accuracy.filter((a) => ['rank_all', 'final', 'ai'].includes(a.source));
-  if (acc.length) L.push(`Đúng so VN-Index sau 10 phiên: ${acc.map((a) => `${a.source === 'rank_all' ? 'xếp hạng' : a.source === 'final' ? 'quyết định cuối' : 'AI'} ${pct(a.beatIndexRate ?? a.hitRate)} (${a.evaluated})`).join(' · ')}`);
+  if (acc.length) L.push(`Đúng so VN-Index sau 10 phiên: ${acc.map((a) => `${a.source === 'rank_all' ? 'xếp hạng' : a.source === 'final' ? 'quyết định cuối' : 'AI'} ${pct(a.beatIndexRate ?? a.hitRate)}${a.beatBasketRate != null ? ` (rổ ${pct(a.beatBasketRate)})` : ''} (${a.evaluated})`).join(' · ')}`);
   if (rv.band.n) L.push(`Dải giá 5 phiên chứa giá thật ${pct(rv.band.coverage90)} (chuẩn 90%, ${rv.band.n} lần)`);
   const made = rv.changes.filter((c) => !c.skipped);
   if (made.length) for (const c of made) L.push(`🔧 ${NAMES[c.name]}: ${val(c.from)} → <b>${val(c.value)}</b>. ${c.reason}`);
-  else if (p.n < RULES.minSample) L.push(`Chưa tự chỉnh: cần ≥ ${RULES.minSample} lệnh đã xong (đang có ${p.n}).`);
-  else L.push('Không cần chỉnh: các chỉ số trong ngưỡng.');
+  else {
+    const few = Object.values(rv.tests || {}).every((x) => x.verdict === 'insufficient');
+    L.push(few ? `Chưa tự chỉnh: mỗi bằng chứng cần ≥ ${RULES.minDates} phiên và |t| ≥ ${RULES.t} (lệnh đã xong: ${p.n}).`
+      : 'Không chỉnh: chưa có bằng chứng nào đủ ý nghĩa thống kê (|t| ≥ 2).');
+  }
   return L.join('\n');
 }
 

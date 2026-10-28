@@ -137,6 +137,28 @@ async function loadMarket() {
   }
 }
 
+// ---------- Chế độ thị trường & Tỷ trọng danh mục ----------
+async function loadMarketRegime() {
+  const el = $('market-regime-pill');
+  if (!el) return;
+  try {
+    const r = await api('/api/market-regime');
+    const dot = $('regime-dot');
+    const content = $('regime-content');
+    if (dot) dot.style.background = r.color || '#10b981';
+    const tag = r.regime === 'CONFIRMED_UPTREND' ? '🟢 TĂNG MẠNH' : (r.regime === 'UPTREND_UNDER_PRESSURE' ? '🟡 ÁP LỰC' : r.regime === 'UNKNOWN' ? '⚪ CHƯA RÕ' : '🔴 RỦI RO');
+    if (content) {
+      content.innerHTML = `<b>${tag}</b> · Phân phối: <b>${r.distDays ?? '–'}</b>/25 · CP: <b>${r.exposure}</b>`;
+    }
+    el.title = `Chế độ: ${r.label}\nSố ngày phân phối 25 phiên: ${r.distDays}\nTỷ trọng cổ phiếu khuyến nghị: ${r.exposure}\n${r.desc}`;
+    el.onclick = () => {
+      showToast(`${r.label}: Phân phối ${r.distDays}/25 phiên · Tỷ trọng CP: ${r.exposure} · ${r.desc}`, 'info', 5000);
+    };
+  } catch {
+    if ($('regime-content')) $('regime-content').textContent = 'Chế độ TT: –';
+  }
+}
+
 // ---------- THỊ TRƯỜNG HÔM NAY: TĂNG / GIẢM & KHỐI NGOẠI MUA / BÁN (MOVERS) ----------
 async function loadMovers(floor = state.moversFloor) {
   try {
@@ -274,15 +296,19 @@ function renderWatchlist() {
     const isSell = s?.recommendation?.code === 'SELL' || s?.recommendation?.code === 'AVOID';
     const rowClass = isBuy ? 'is-buy' : isHold ? 'is-hold' : isSell ? 'is-sell' : '';
 
+    const tpBadge = s?.trendPick ? '<span class="st-badge up" style="font-size:9px;padding:1px 4px;margin-left:4px" title="Trend Pick 8 năm">★ TP</span>' : '';
+    const riskBadge = s?.stockRisk ? '<span class="st-badge down" style="font-size:9px;padding:1px 4px;margin-left:4px" title="Cảnh báo rủi ro cao">🚨 RỦI RO</span>' : '';
+    const mcTxt = s?.monteCarlo ? ` · <span class="small ${s.monteCarlo.signal.includes('BUY') ? 'up' : s.monteCarlo.signal === 'RISK' || s.monteCarlo.signal === 'SELL' ? 'down' : 'muted'}">🎲 ${s.monteCarlo.signal} (P↑ ${Math.round(s.monteCarlo.probUp * 100)}%)</span>` : '';
+
     const meta = s
-      ? `<span class="rec-txt ${recColor(s.recommendation.code)}">${esc(s.recommendation.label)}</span> · <span class="num">${s.total}đ</span>${s.warnings ? ' · ⚠' : ''}`
+      ? `<span class="rec-txt ${recColor(s.recommendation.code)}">${esc(s.recommendation.label)}</span> · <span class="num">${s.total}đ</span>${mcTxt}${s.warnings ? ' · ⚠' : ''}`
       : 'Đang chờ quét…';
     const aiTxt = w.ai ? ` · AI: <span class="${aiColor(w.ai.decision)}">${esc(w.ai.decisionLabel)}</span>` : '';
     const alertTxt = [w.priceAbove != null && `≥${w.priceAbove}`, w.priceBelow != null && `≤${w.priceBelow}`].filter(Boolean).join(' ');
 
     return `
       <div class="wl-row ${rowClass} ${state.current?.symbol === w.symbol ? 'active' : ''}" data-sym="${esc(w.symbol)}">
-        <span class="wl-sym">${esc(w.symbol)}</span>
+        <span class="wl-sym">${esc(w.symbol)}${tpBadge}${riskBadge}</span>
         <span class="wl-price">${s ? `${fmt(s.price.close)} <span class="${dirClass(s.price.change)} small">${signed(s.price.changePct)}%</span>` : ''}</span>
         <button class="wl-del" data-del="${esc(w.symbol)}" title="Bỏ theo dõi" aria-label="Bỏ theo dõi ${esc(w.symbol)}">✕</button>
         <span class="wl-meta">${meta}${aiTxt}${alertTxt ? ` · 🔔 ${esc(alertTxt)}` : ''}</span>
@@ -504,6 +530,9 @@ function initTabs() {
 
     document.querySelectorAll('.nav-tab').forEach((t) => t.classList.remove('on'));
     tab.classList.add('on');
+
+    const panel = $('deep-dive-panel');
+    if (panel) panel.open = true;
 
     const reportEl = $('report');
     if (target === 'all') {
@@ -931,6 +960,25 @@ function drawChart(a, data, tf) {
   if (a.plan) {
     candles.createPriceLine({ price: a.plan.stopLoss, color: down, lineWidth: 1, lineStyle: LC.LineStyle.Dashed, axisLabelVisible: true, title: 'Cắt lỗ' });
     candles.createPriceLine({ price: a.plan.target, color: up, lineWidth: 1, lineStyle: LC.LineStyle.Dashed, axisLabelVisible: true, title: 'Mục tiêu' });
+    if (a.plan.trailing?.chandelierStop) {
+      candles.createPriceLine({ price: a.plan.trailing.chandelierStop, color: '#f59e0b', lineWidth: 1, lineStyle: LC.LineStyle.Dotted, axisLabelVisible: true, title: 'Chandelier' });
+    }
+  }
+
+  // Vẽ dải nón dự phóng Monte Carlo 20 phiên tương lai (P90, Median P50, P10)
+  if (tf === 'D' && a.monteCarlo?.projectionSeries?.length && data.bars.length) {
+    const lastBar = data.bars.at(-1);
+    const startPoint = { time: lastBar.time, value: lastBar.close };
+    const p90 = [startPoint, ...a.monteCarlo.projectionSeries.map((s) => ({ time: s.time, value: s.p90 }))];
+    const p50 = [startPoint, ...a.monteCarlo.projectionSeries.map((s) => ({ time: s.time, value: s.p50 }))];
+    const p10 = [startPoint, ...a.monteCarlo.projectionSeries.map((s) => ({ time: s.time, value: s.p10 }))];
+
+    const sP90 = chart.addLineSeries({ color: '#10b981', lineWidth: 1.5, lineStyle: LC.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: true, title: 'MC P90' });
+    sP90.setData(p90);
+    const sP50 = chart.addLineSeries({ color: '#f59e0b', lineWidth: 2, lineStyle: LC.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: true, title: 'MC Trung vị' });
+    sP50.setData(p50);
+    const sP10 = chart.addLineSeries({ color: '#ef4444', lineWidth: 1.5, lineStyle: LC.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: true, title: 'MC P10' });
+    sP10.setData(p10);
   }
 
   const legend = $('chart-legend');
@@ -1411,7 +1459,7 @@ function pickCard(c, p, rank) {
         <div class="pk-price"><b>${fmt(c.close)}</b><span class="${dirClass(c.changePct)}">${signed(c.changePct)}%</span></div>
       </div>
       <div><span class="pk-verdict ${tone}">${esc(label)}${p ? ` · ${p.confidence}%` : ''}</span></div>
-      <div class="pk-tags">${c.setups.map((s) => `<span class="pk-tag" title="${esc(s.desc)}">${esc(s.label)}</span>`).join('')}</div>
+      <div class="pk-tags">${c.trendPick ? '<span class="pk-tag" style="background:rgba(46,189,133,0.15);color:#2ebd85;border:1px solid #2ebd85;font-weight:700" title="Cổ phiếu gần đỉnh 52 tuần và biến động thấp theo quy tắc Trend Pick 8 năm">★ TREND PICK</span>' : ''}${c.setups.map((s) => `<span class="pk-tag" title="${esc(s.desc)}">${esc(s.label)}</span>`).join('')}</div>
       <p class="pk-thesis">${esc(p?.thesis || c.recommendation.desc)}</p>
       <div class="pk-levels">
         <div class="pk-lv"><div class="k">Vùng mua</div><div class="v">${entry ? `${fmt(entry.from)}–${fmt(entry.to)}` : '–'}</div></div>
@@ -1421,18 +1469,24 @@ function pickCard(c, p, rank) {
       </div>
       ${p?.trigger ? `<div class="pk-line"><b>Điều kiện mua:</b> ${esc(p.trigger)}</div>` : ''}
       ${p?.mainRisk ? `<div class="pk-line"><b>Rủi ro:</b> ${esc(p.mainRisk)}</div>` : ''}
-      ${c.quality ? `<div class="pk-quality"><b>Vì sao là cổ ngon</b> ${c.quality.score != null ? `<span class="muted small">· chất lượng ${c.quality.score}/100${c.combined != null ? ` · điểm chung ${c.combined}` : ''}</span>` : ''}
-        <ul>${c.quality.checks.map((k) => `<li class="${k.ok ? 'up' : 'down'}">${k.ok ? '✓' : '✕'} ${esc(k.label)}</li>`).join('')}
-        ${c.sector ? `<li class="${c.sector.pass ? 'up' : 'down'}">${c.sector.pass ? '✓' : '✕'} ${esc(c.sector.label)}</li>` : ''}
-        ${c.liquidity ? `<li class="${c.liquidity.pass ? 'up' : 'down'}">${c.liquidity.pass ? '✓' : '✕'} Thanh khoản TB ${fmt(c.liquidity.avg / 1e9, 1)} tỷ/phiên, ${c.liquidity.okDays}/${c.liquidity.days} phiên ≥ 5 tỷ (phiên gần nhất ${fmt(c.liquidity.last / 1e9, 1)} tỷ)</li>` : ''}</ul></div>` : ''}
-      <div class="pk-stats">
-        <span>Điểm HT ${signed(c.total, 0)}</span>
-        ${c.ranking ? `<span title="Điểm xếp hạng 4 yếu tố (0–100)">Xếp hạng ${c.ranking.score}</span>` : ''}
-        ${c.foreign ? `<span>NN 20 phiên ${signed(c.foreign.net20 / 1e9, 1)} tỷ</span>` : ''}
-        ${f.pe != null ? `<span>P/E ${fmt(f.pe, 1)}</span>` : ''}
-        ${f.roe != null ? `<span>ROE ${fmtPct(f.roe)}</span>` : ''}
-        ${f.profitGrowthTTM != null ? `<span>LN 4Q ${fmtPct(f.profitGrowthTTM, 0)}</span>` : ''}
-      </div>
+      <details class="pk-details-drawer">
+        <summary class="pk-details-toggle">🔍 Xem chi tiết BCTC &amp; Chỉ số định lượng ▾</summary>
+        <div class="pk-drawer-content">
+          ${c.quality ? `<div class="pk-quality"><b>Đánh giá chất lượng cơ bản</b> ${c.quality.score != null ? `<span class="muted small">· chất lượng ${c.quality.score}/100${c.combined != null ? ` · điểm chung ${c.combined}` : ''}</span>` : ''}
+            <ul>${c.quality.checks.map((k) => `<li class="${k.ok ? 'up' : 'down'}">${k.ok ? '✓' : '✕'} ${esc(k.label)}</li>`).join('')}
+            ${c.sector ? `<li class="${c.sector.pass ? 'up' : 'down'}">${c.sector.pass ? '✓' : '✕'} ${esc(c.sector.label)}</li>` : ''}
+            ${c.liquidity ? `<li class="${c.liquidity.pass ? 'up' : 'down'}">${c.liquidity.pass ? '✓' : '✕'} Thanh khoản TB ${fmt(c.liquidity.avg / 1e9, 1)} tỷ/phiên, ${c.liquidity.okDays}/${c.liquidity.days} phiên ≥ 5 tỷ (phiên gần nhất ${fmt(c.liquidity.last / 1e9, 1)} tỷ)</li>` : ''}</ul></div>` : ''}
+          <div class="pk-stats">
+            <span>Điểm HT ${signed(c.total, 0)}</span>
+            ${c.ranking ? `<span title="Điểm xếp hạng 4 yếu tố (0–100)">Xếp hạng ${c.ranking.score}</span>` : ''}
+            ${c.monteCarlo ? `<span title="Mô phỏng Monte Carlo 20 phiên" style="font-weight:600;color:var(--c-primary)">🎲 P(tăng) ${Math.round(c.monteCarlo.probUp * 100)}% (R/R ${c.monteCarlo.rr})</span>` : ''}
+            ${c.foreign ? `<span>NN 20 phiên ${signed(c.foreign.net20 / 1e9, 1)} tỷ</span>` : ''}
+            ${f.pe != null ? `<span>P/E ${fmt(f.pe, 1)}</span>` : ''}
+            ${f.roe != null ? `<span>ROE ${fmtPct(f.roe)}</span>` : ''}
+            ${f.profitGrowthTTM != null ? `<span>LN 4Q ${fmtPct(f.profitGrowthTTM, 0)}</span>` : ''}
+          </div>
+        </div>
+      </details>
       <div class="pk-foot">
         <button type="button" class="btn btn-glass btn-sm" data-watch="${esc(c.symbol)}" ${watching ? 'disabled' : ''}>${watching ? '✓ Đang theo dõi' : '+ Theo dõi'}</button>
         <button type="button" class="btn btn-primary btn-sm" data-sym="${esc(c.symbol)}">Phân tích chi tiết →</button>
@@ -2270,26 +2324,57 @@ function showRankView() {
   if (RK.result) renderRankBacktest(RK.result);
 }
 
+let currentRankBoard = null;
+let currentRankFilter = 'all';
+
+function renderRankTable(b, filter = 'all') {
+  currentRankFilter = filter;
+  const trendCount = (b.rows || []).filter((r) => r.trendPick).length;
+  const riskCount = (b.rows || []).filter((r) => r.trend?.trendState === 'DOWN' && (r.factors?.high <= -0.30 || r.score < 30)).length;
+  
+  let displayed = b.rows;
+  if (filter === 'top8') displayed = b.rows.filter((r) => r.pfRank != null && r.pfRank <= 8);
+  else if (filter === 'tp') displayed = b.rows.filter((r) => r.trendPick);
+  else if (filter === 'risk') displayed = b.rows.filter((r) => r.trend?.trendState === 'DOWN' && (r.factors?.high <= -0.30 || r.score < 30));
+
+  const chips = [
+    `<button type="button" class="btn btn-glass btn-xs ${filter === 'all' ? 'on' : ''}" data-rk-flt="all">Tất cả (${b.rows.length})</button>`,
+    `<button type="button" class="btn btn-glass btn-xs ${filter === 'top8' ? 'on' : ''}" data-rk-flt="top8">Top 8 danh mục mẫu</button>`,
+    `<button type="button" class="btn btn-glass btn-xs ${filter === 'tp' ? 'on' : ''}" data-rk-flt="tp" style="color:var(--c-primary);font-weight:700">★ Trend Picks (${trendCount})</button>`,
+    `<button type="button" class="btn btn-glass btn-xs ${filter === 'risk' ? 'on' : ''}" data-rk-flt="risk" style="color:#f6465d;font-weight:700">🚨 Rủi ro sụt giảm (${riskCount})</button>`,
+  ].join(' ');
+
+  $('rk-board').innerHTML = `
+    <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap;">${chips}</div>
+    <div class="tbl-wrap"><table class="tbl rk-table"><thead><tr><th>#</th><th>Mã</th><th>Giá</th><th>Hôm nay</th><th>GTGD TB20</th><th>Điểm</th><th>Đánh giá</th>
+    ${Object.values(FACTOR_LABELS).map((l) => `<th>${l}</th>`).join('')}<th>MA200</th></tr></thead><tbody>
+    ${displayed.map((r, i) => `<tr class="${r.pfRank != null && r.pfRank <= 8 ? 'rk-top' : ''}">
+      <td>${i + 1}</td><td><a href="#${r.symbol}" class="pf-sym" data-sym="${r.symbol}"><b>${r.symbol}</b></a>${r.trendPick ? ' <span class="st-badge up" style="font-size:10px;margin-left:4px" title="Trend Pick 8 năm">★ TP</span>' : ''}</td>
+      <td>${fmt(r.close)}</td><td class="${dirClass(r.changePct)}">${signed(r.changePct)}%</td><td>${fmt(r.value20 / 1e9, 1)} tỷ</td>
+      <td><b class="${RANK_TONE[r.code]}">${r.score}</b></td><td class="${RANK_TONE[r.code]}" style="font-family:inherit">${esc(r.label)}</td>
+      <td>${pct(r.factors.mom)}</td><td>${pct(r.factors.high)}</td><td>${r.factors.atr != null ? `${fmt(r.factors.atr * 100, 1)}%` : '–'}</td><td>${fmt(r.factors.adx, 0)}</td>
+      <td>${r.aboveMa200 === false ? '<span class="down">dưới</span>' : '<span class="up">trên</span>'}</td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="muted small" style="margin-top:6px">Hàng tô sáng = top 8 trên MA200 (danh mục mẫu tự động). Bấm mã để phân tích chi tiết.</p>`;
+}
+
 async function loadRankBoard() {
   $('rk-board').innerHTML = '<p class="muted">Đang tính bảng xếp hạng…</p>';
   try {
     const b = await api('/api/rank');
+    currentRankBoard = b;
     $('rk-sub').textContent = `Phiên ${b.date} · ${b.universe} mã sàn ${b.criteria.floors.join(', ')} có giá trị giao dịch TB 20 phiên ≥ ${fmt(b.criteria.minValue / 1e9, 1)} tỷ · cập nhật ${new Date(b.updatedAt).toLocaleTimeString('vi-VN')}`;
-    $('rk-board').innerHTML = `<div class="tbl-wrap"><table class="tbl rk-table"><thead><tr><th>#</th><th>Mã</th><th>Giá</th><th>Hôm nay</th><th>GTGD TB20</th><th>Điểm</th><th>Đánh giá</th>
-      ${Object.values(FACTOR_LABELS).map((l) => `<th>${l}</th>`).join('')}<th>MA200</th></tr></thead><tbody>
-      ${b.rows.map((r, i) => `<tr class="${r.pfRank != null && r.pfRank <= 8 ? 'rk-top' : ''}">
-        <td>${i + 1}</td><td><a href="#${r.symbol}" class="pf-sym" data-sym="${r.symbol}">${r.symbol}</a></td>
-        <td>${fmt(r.close)}</td><td class="${dirClass(r.changePct)}">${signed(r.changePct)}%</td><td>${fmt(r.value20 / 1e9, 1)} tỷ</td>
-        <td><b class="${RANK_TONE[r.code]}">${r.score}</b></td><td class="${RANK_TONE[r.code]}" style="font-family:inherit">${esc(r.label)}</td>
-        <td>${pct(r.factors.mom)}</td><td>${pct(r.factors.high)}</td><td>${r.factors.atr != null ? `${fmt(r.factors.atr * 100, 1)}%` : '–'}</td><td>${fmt(r.factors.adx, 0)}</td>
-        <td>${r.aboveMa200 === false ? '<span class="down">dưới</span>' : '<span class="up">trên</span>'}</td></tr>`).join('')}
-      </tbody></table></div>
-      <p class="muted small" style="margin-top:6px">Hàng tô sáng = top 8 trên MA200 (danh mục mẫu, tự ghi vào nhật ký dự đoán mỗi phiên). Bấm mã để phân tích chi tiết.</p>`;
+    renderRankTable(b, currentRankFilter);
   } catch (err) {
     $('rk-board').innerHTML = `<p class="error">${esc(err.message)}</p>`;
   }
 }
 $('rk-board')?.addEventListener('click', (e) => {
+  const flt = e.target.closest('[data-rk-flt]');
+  if (flt && currentRankBoard) {
+    renderRankTable(currentRankBoard, flt.dataset.rkFlt);
+    return;
+  }
   const s = e.target.closest('.pf-sym');
   if (s) { e.preventDefault(); analyze(s.dataset.sym); }
 });
@@ -2317,7 +2402,7 @@ function renderRankBacktest(r) {
   $('rk-bt').innerHTML = `
     <div class="bt-verdict tone-${beat ? 'up' : 'down'}">Danh mục top ${r.config.top} ${beat ? 'thắng' : 'thua'} VN-Index: ${pct(m.totalReturn)} so với ${pct(m.benchmarkReturn)}
       (rổ chia đều ${pct(r.equalWeight.totalReturn)}). Thắng chỉ số ${ac.periodsBeatIndex}/${ac.periods} kỳ, ${fmt((ac.picksBeatIndex / ac.picks) * 100, 0)}% số mã được chọn thắng chỉ số.</div>
-    <div class="muted small" style="margin:6px 0 12px">${r.period.from} → ${r.period.to} · ${r.config.universe} mã · tái cơ cấu mỗi ${r.config.rebalance} phiên · giữ mã còn trong top ${r.config.top * (r.config.buffer ?? 1)} · ${r.config.earnings ? 'có yếu tố KQKD quý · ' : ''}${r.config.trendFilter ? 'có' : 'không'} lọc MA200 · khi VN-Index yếu: ${{ none: 'vẫn đầy vốn', half: 'giữ nửa số mã', cash: 'cầm tiền' }[r.config.regime]} (${r.regime.bearPeriods}/${r.regime.periods} kỳ thị trường yếu, hiện tại ${r.regime.now === 'bear' ? '<span class="down">yếu</span>' : '<span class="up">tốt</span>'}) · vốn ${fmtBig(r.config.initialCash)}</div>
+    <div class="muted small" style="margin:6px 0 12px">${r.period.from} → ${r.period.to} · ${r.config.universe} mã${r.universe ? (r.universe.survivorshipBias ? ' <span class="down">(rổ hiện tại: có thiên lệch sống sót, kết quả bị thổi phồng)</span>' : ` (rổ theo thời điểm${r.universe.missingPrice ? `, ${r.universe.missingPrice} mã thiếu dữ liệu giá` : ''}${r.universe.delistedExits ? `, ${r.universe.delistedExits} lần thoát do hủy niêm yết` : ''})`) : ''} · tái cơ cấu mỗi ${r.config.rebalance} phiên · giữ mã còn trong top ${r.config.top * (r.config.buffer ?? 1)} · ${r.config.earnings ? 'có yếu tố KQKD quý · ' : ''}${r.config.trendFilter ? 'có' : 'không'} lọc MA200 · khi VN-Index yếu: ${{ none: 'vẫn đầy vốn', half: 'giữ nửa số mã', cash: 'cầm tiền' }[r.config.regime]} (${r.regime.bearPeriods}/${r.regime.periods} kỳ thị trường yếu, hiện tại ${r.regime.now === 'bear' ? '<span class="down">yếu</span>' : '<span class="up">tốt</span>'}) · vốn ${fmtBig(r.config.initialCash)}</div>
     <div class="ai-levels bt-kpis">
       ${kpi('Lợi nhuận', pct(m.totalReturn), dirClass(m.totalReturn))}
       ${kpi('Mỗi năm', pct(m.annualReturn), dirClass(m.annualReturn))}
@@ -2361,17 +2446,47 @@ function renderRankBacktest(r) {
   RK.chart = chart;
 }
 
+// Kiểm chứng các giả thuyết chọn trước: chỉ các dòng này dùng để kết luận, bảng nguồn bên dưới là khám phá thêm
+const VERDICT = {
+  insufficient: ['muted', 'Chưa đủ dữ liệu'], supported: ['up', 'Ủng hộ'], rejected: ['down', 'Bác bỏ'], inconclusive: ['', 'Chưa kết luận'],
+};
+function verificationHtml(v) {
+  if (!v?.hypotheses) return '';
+  const val = (h) => (h.mean == null ? '–' : h.id === 'H1' ? fmt(h.mean, 3) : h.id === 'H3' ? `${fmt(h.coverage * 100, 0)}% phủ` : pct(h.mean));
+  const remain = (h) => {
+    if (h.verdict === 'supported' || h.verdict === 'rejected') return '–';
+    const need = h.needDatesPrior ?? h.needDates;
+    return need == null ? '–' : `~${Math.max(0, need - h.n)} phiên${h.needDates && h.needDatesPrior ? ` <span class="muted small">(theo mức đang đo: ~${Math.max(0, h.needDates - h.n)})</span>` : ''}`;
+  };
+  const rows = v.hypotheses.map((h) => {
+    const [cls, txt] = VERDICT[h.verdict] || ['', h.verdict];
+    return `<tr><td style="font-family:inherit"><b>${h.id}</b> ${esc(h.title)}</td><td>${h.n}</td><td>${val(h)}</td><td>${h.t ?? '–'}</td>
+      <td class="${cls}" style="font-family:inherit"><b>${txt}</b>${h.note ? ` · ${esc(h.note)}` : ''}</td><td>${remain(h)}</td></tr>`;
+  }).join('');
+  const calib = v.calibration.filter((c) => c.n).map((c) => `<tr><td>${c.source}</td>${c.groups.map((g) => `<td>${g.n ? `${fmt(g.hitRate * 100, 0)}% <span class="muted small">/ ${g.n}</span>` : '–'}</td>`).join('')}</tr>`).join('');
+  return `<h3 style="margin:0 0 6px">Kiểm chứng giả thuyết chính</h3>
+    <p class="muted small" style="margin:0 0 8px">Mua giá mở cửa phiên sau dự đoán. Mỗi phiên tính một giá trị, kiểm định bằng t Newey-West (cửa sổ chồng nhau);
+      |t| ≥ 2 và ≥ ${v.rules.minDates} phiên mới kết luận. "Còn cần" = số phiên nữa để đủ ý nghĩa nếu hiệu ứng thật bằng mức giả định.</p>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Giả thuyết</th><th>Số phiên</th><th>Ước lượng</th><th>t</th><th>Kết luận</th><th>Còn cần</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted small" style="margin:6px 0 14px">IC điểm xếp hạng: 5 phiên ${v.ic[5].mean ?? '–'} (t ${v.ic[5].t ?? '–'}, ${v.ic[5].n} phiên) · 10 phiên ${v.ic[10].mean ?? '–'} · 20 phiên ${v.ic[20].mean ?? '–'}.
+      Phiên bản mô hình: ${Object.entries(v.versions).map(([k, n]) => `${esc(k)} (${n})`).join(', ')}.</p>
+    ${calib ? `<details style="margin-bottom:14px"><summary class="muted small" style="cursor:pointer">Độ tự tin của AI có đúng không (tỷ lệ đúng so rổ, 10 phiên)</summary>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Nguồn</th><th>Tự tin thấp (&lt;60)</th><th>Vừa (60–74)</th><th>Cao (≥75)</th></tr></thead><tbody>${calib}</tbody></table></div></details>` : ''}`;
+}
+
 async function loadPredictions() {
   $('pd-body').innerHTML = '<p class="muted">Đang chấm các dự đoán…</p>';
   try {
-    const p = await api('/api/predictions');
+    const [p, v] = await Promise.all([api('/api/predictions'), api('/api/verification').catch(() => null)]);
     const cell = (x) => {
       if (!x.evaluated) return '<td class="muted">chưa đủ phiên</td>';
       if (x.beatIndexRate == null) return `<td>${fmt(x.hitRate * 100, 0)}% <span class="muted small">đúng hướng / ${x.evaluated}</span></td>`;
       const beat = x.beatIndexRate * 100;
       const ex = [x.buyAvgExcess != null ? `mua ${pct(x.buyAvgExcess)}` : '', x.sellAvgExcess != null ? `tránh ${pct(x.sellAvgExcess)}` : ''].filter(Boolean).join(' · ');
+      const exB = [x.buyAvgExcessBasket != null ? `mua ${pct(x.buyAvgExcessBasket)}` : '', x.sellAvgExcessBasket != null ? `tránh ${pct(x.sellAvgExcessBasket)}` : ''].filter(Boolean).join(' · ');
+      const basket = x.beatBasketRate == null ? '' : `<div class="small"><b class="${x.beatBasketRate >= 0.55 ? 'up' : x.beatBasketRate < 0.45 ? 'down' : ''}">${fmt(x.beatBasketRate * 100, 0)}%</b> <span class="muted">đúng so rổ${exB ? ` · ${exB}` : ''}</span></div>`;
       return `<td><b class="${beat >= 55 ? 'up' : beat < 45 ? 'down' : ''}">${fmt(beat, 0)}%</b> <span class="muted small">đúng so VNI / ${x.evaluated}</span>
-        <div class="muted small">${ex ? `${ex} so VNI · ` : ''}đúng hướng giá ${fmt(x.hitRate * 100, 0)}%</div></td>`;
+        ${basket}<div class="muted small">${ex ? `${ex} so VNI · ` : ''}đúng hướng giá ${fmt(x.hitRate * 100, 0)}%</div></td>`;
     };
     const RES = (it) => {
       const h = [5, 10, 20].filter((k) => it.result?.[k]);
@@ -2379,12 +2494,14 @@ async function loadPredictions() {
       if (!h.length) return '<span class="muted">chờ</span>';
       return h.map((k) => {
         const r = it.result[k], ok = r.beatIndex ?? r.correct;
-        return `<span class="${ok ? 'up' : 'down'}" title="Giá ${pct(r.ret)}${r.excess != null ? `, so VN-Index ${pct(r.excess)}` : ''}">${k}p ${ok ? '✓' : '✕'} ${pct(r.excess ?? r.ret)}</span>`;
+        return `<span class="${ok ? 'up' : 'down'}" title="Giá ${pct(r.ret)}${r.excess != null ? `, so VN-Index ${pct(r.excess)}` : ''}${r.excessBasket != null ? `, so rổ ${pct(r.excessBasket)}` : ''}">${k}p ${ok ? '✓' : '✕'} ${pct(r.excess ?? r.ret)}</span>`;
       }).join(' · ');
     };
-    $('pd-body').innerHTML = `
+    $('pd-body').innerHTML = `${verificationHtml(v)}
+      <h3 style="margin:0 0 6px">Độ chính xác từng nguồn (khám phá)</h3>
       <p class="muted small" style="margin:0 0 10px">Đã ghi ${p.totalItems} dự đoán${p.firstDate ? ` từ ${p.firstDate}` : ''}. "Đúng so VNI" = mã khuyên mua tăng hơn VN-Index, hoặc mã khuyên tránh/bán kém VN-Index trong cùng khoảng
         (khuyến nghị là so với thị trường: khi cả thị trường tăng mạnh, mã "tránh" vẫn có thể tăng nhưng tăng ít hơn).
+        "Đúng so rổ" chấm tương tự nhưng so với lãi trung bình đồng tỷ trọng của cả rổ theo dõi — công bằng hơn khi vài mã vốn hóa lớn kéo VN-Index.
         "Đúng hướng giá" chấm theo giá tăng/giảm tuyệt đối. Tỷ lệ ngẫu nhiên ≈ 50%; cần ít nhất vài chục dự đoán đã chấm mới đáng tin.</p>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Nguồn dự đoán</th><th>Đã ghi</th><th>Đang chờ</th><th>Sau 5 phiên</th><th>Sau 10 phiên</th><th>Sau 20 phiên</th></tr></thead><tbody>
         ${p.summary.map((s) => `<tr><td style="font-family:inherit"><b>${esc(s.label)}</b></td><td>${s.total}</td><td>${s.pending}</td>${s.horizons.map(cell).join('')}</tr>`).join('')}
@@ -2617,6 +2734,53 @@ function aiReviewBlock(a, eff) {
   return status + checks;
 }
 
+function mcAndRiskBlock(a) {
+  let html = '';
+  if (a.stockRisk?.isRisky) {
+    html += `<div class="bf-ai down" style="margin-top:10px; border-left:4px solid var(--down); background:rgba(244,63,94,0.12)">
+      <div style="font-size:13px; font-weight:700; color:var(--down-text); margin-bottom:4px;">🚨 CẢNH BÁO RỦI RO CAO (${esc(a.stockRisk.riskLevel)})</div>
+      <div style="font-size:12.5px; line-height:1.4;">${esc(a.stockRisk.reasons.join(' · '))}. <b>Khuyến nghị: Tuyệt đối tránh bắt dao rơi, ưu tiên giữ tiền mặt.</b></div>
+    </div>`;
+  }
+  if (a.monteCarlo) {
+    const mc = a.monteCarlo;
+    const tone = mc.signal.includes('BUY') ? 'up' : (mc.signal === 'SELL' || mc.signal === 'RISK' ? 'down' : 'ref');
+    const badge = a.trendPick ? '<span class="st-badge up" style="margin-left:6px; font-weight:700">★ TREND PICK 8Y</span>' : '';
+    const pGain = Math.round(mc.probGain5 * 100);
+    const pLoss = Math.round(mc.probLoss7 * 100);
+    const pNeutral = Math.max(0, 100 - pGain - pLoss);
+
+    html += `<div class="bf-ai ${tone}" style="margin-top:10px; border-radius:8px; padding:12px 14px; background:var(--surface-2); border:1px solid var(--border-light)">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px">
+        <span style="font-size:13px"><b>🎲 Phân phối xác suất Monte Carlo (20 phiên):</b> Tín hiệu <b class="${tone}">${esc(mc.signal)}</b>${badge}</span>
+        <span class="small" style="background:var(--surface-3); padding:3px 8px; border-radius:4px">Tỷ lệ Lời/Lỗ (R/R): <b>${mc.rr}</b></span>
+      </div>
+
+      <!-- Probability Distribution Bar -->
+      <div style="margin:8px 0 6px">
+        <div style="display:flex; height:10px; border-radius:5px; overflow:hidden; background:var(--surface-3); border:1px solid rgba(255,255,255,0.06)">
+          <div style="width:${pGain}%; background:var(--up); transition:width 0.3s" title="Xác suất đỉnh lãi ≥ 5%: ${pGain}%"></div>
+          <div style="width:${pNeutral}%; background:rgba(255,255,255,0.2)" title="Vùng dao động hẹp: ${pNeutral}%"></div>
+          <div style="width:${pLoss}%; background:var(--down); transition:width 0.3s" title="Xác suất đáy lỗ ≥ 7%: ${pLoss}%"></div>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:11px; margin-top:4px; color:var(--muted)">
+          <span style="color:var(--up)">▲ Lãi ≥ 5%: <b>${pGain}%</b></span>
+          <span>Dao động hẹp: <b>${pNeutral}%</b></span>
+          <span style="color:var(--down)">▼ Lỗ ≥ 7%: <b>${pLoss}%</b></span>
+        </div>
+      </div>
+
+      <div class="small muted" style="margin-top:6px; display:flex; gap:16px; flex-wrap:wrap; border-top:1px dashed var(--border); padding-top:6px">
+        <span>Xác suất tăng: <b>${Math.round(mc.probUp * 100)}%</b></span>
+        <span>Kỳ vọng đỉnh: <b class="up">+${mc.peakGainMedian}%</b></span>
+        <span>Kỳ vọng đáy: <b class="down">${mc.troughDdMedian}%</b></span>
+        <span>Lợi suất trung vị: <b>${mc.finalRetMedian > 0 ? '+' : ''}${mc.finalRetMedian}%</b></span>
+      </div>
+    </div>`;
+  }
+  return html;
+}
+
 function renderBrief(a) {
   const el = $('brief-card');
   const b = a.brief;
@@ -2627,6 +2791,15 @@ function renderBrief(a) {
   const table = (steps) => `<table class="tbl st-table"><thead><tr><th>#</th><th></th><th>Vùng giá</th><th>Tỷ trọng</th><th>Số tiền</th><th>Số cp</th><th>Điều kiện</th></tr></thead>
     <tbody>${stepRows(steps, { close: a.price.close })}</tbody></table>`;
   el.className = `card brief-card tone-${eff.tone}`;
+
+  const entry = a.plan?.entryZone || (l?.s1 ? { from: l.s1, to: a.price.close } : null);
+  const stop = l?.stop || a.plan?.stopLoss;
+  const chandelier = a.plan?.trailing?.chandelierStop;
+  const target = l?.r1 || a.plan?.target;
+  const inZone = entry && a.price.close >= entry.from && a.price.close <= entry.to;
+  const rr = l?.riskReward || (stop && target && a.price.close > stop ? (target - a.price.close) / (a.price.close - stop) : null);
+  const weightStr = l?.weight != null ? `${Math.round(l.weight * 100)}% vốn` : '15–20% vốn';
+
   el.innerHTML = `
     <div class="bf-top">
       <div class="bf-verdict ${eff.tone}">${BRIEF_ICON[eff.tone]} ${esc(eff.verdict)}</div>
@@ -2636,24 +2809,57 @@ function renderBrief(a) {
       </div>
       <button type="button" class="btn btn-glass btn-xs" id="bf-copy" title="Sao chép kế hoạch để gửi nhanh">📋 Sao chép</button>
     </div>
-    ${aiReviewBlock(a, eff)}
-    ${st ? capitalBox(a, st) : ''}
-    ${st ? `<div class="bf-plays">
-      <div class="bf-play${b.holding ? '' : ' mine'}">
-        <h4>🆕 Nếu chưa có cổ phiếu${b.holding ? '' : ' <span class="bf-you">trường hợp của bạn</span>'}</h4>
-        <div class="tbl-wrap">${table(st.fresh)}</div>
+
+    <!-- 4 Khối thông số then chốt trực quan -->
+    <div class="bf-key-metrics">
+      <div class="bf-metric-card">
+        <span class="m-label">🎯 Vùng mua khuyến nghị</span>
+        <span class="m-val">${entry ? `${fmt(entry.from)} – ${fmt(entry.to)}` : '–'}</span>
+        <span class="m-sub ${inZone ? 'up' : ''}">${inZone ? '● Đang trong vùng mua' : entry && a.price.close > entry.to ? `Chờ chỉnh (${signed(((entry.to - a.price.close) / a.price.close) * 100, 1)}%)` : 'Chờ tích lũy'}</span>
       </div>
-      <div class="bf-play${b.holding ? ' mine' : ''}">
-        <h4>💼 Nếu đang nắm giữ${b.holding ? ' <span class="bf-you">trường hợp của bạn</span>' : ''}</h4>
-        ${b.plays?.position ? `<div class="bf-pos">${esc(b.plays.position)}</div>` : '<div class="muted small" style="margin-bottom:6px">Ghi lệnh trong 💼 Danh mục để tool tính đúng số cổ phiếu cần mua thêm / bán theo vị thế của bạn.</div>'}
-        ${eff.fin?.holder ? holderBlock(eff.fin.holder) : ''}
-        <div class="tbl-wrap">${table(st.hold)}</div>
+      <div class="bf-metric-card down">
+        <span class="m-label">🛡️ Cắt lỗ &amp; Chandelier</span>
+        <span class="m-val">${fmt(stop)}</span>
+        <span class="m-sub">${chandelier ? `Chandelier Exit: ${fmt(chandelier)}` : stop ? `${pct((stop - a.price.close) / a.price.close)}` : 'Ngưỡng vi phạm'}</span>
       </div>
-    </div>` : ''}
-    <div class="bf-body">
-      <ul class="bf-reasons">${b.reasons.map((r) => `<li data-tone="${r.tone}"><span class="bf-ic" aria-hidden="true">${BRIEF_ICON[r.tone]}</span>${esc(r.text)}</li>`).join('')}</ul>
-      ${l ? ladder(l) : ''}
+      <div class="bf-metric-card up">
+        <span class="m-label">🚀 Mục tiêu chốt lời</span>
+        <span class="m-val">${fmt(target)}</span>
+        <span class="m-sub">${target ? `${pct((target - a.price.close) / a.price.close)}${rr ? ` · R/R ${fmt(rr, 1)}x` : ''}` : 'Kỳ vọng'}</span>
+      </div>
+      <div class="bf-metric-card accent">
+        <span class="m-label">💼 Tỷ trọng đề xuất</span>
+        <span class="m-val">${weightStr}</span>
+        <span class="m-sub">Tối đa / mã</span>
+      </div>
     </div>
+
+    ${aiReviewBlock(a, eff)}
+    ${mcAndRiskBlock(a)}
+
+    <!-- Kế hoạch bậc thang giá và phân bổ vốn (Thu gọn) -->
+    <details class="bf-deep-details">
+      <summary class="bf-deep-toggle">📐 Xem chi tiết phân bổ giải ngân &amp; Bậc thang giá ▾</summary>
+      <div class="bf-deep-content">
+        ${st ? capitalBox(a, st) : ''}
+        ${st ? `<div class="bf-plays">
+          <div class="bf-play${b.holding ? '' : ' mine'}">
+            <h4>🆕 Nếu chưa có cổ phiếu${b.holding ? '' : ' <span class="bf-you">trường hợp của bạn</span>'}</h4>
+            <div class="tbl-wrap">${table(st.fresh)}</div>
+          </div>
+          <div class="bf-play${b.holding ? ' mine' : ''}">
+            <h4>💼 Nếu đang nắm giữ${b.holding ? ' <span class="bf-you">trường hợp của bạn</span>' : ''}</h4>
+            ${b.plays?.position ? `<div class="bf-pos">${esc(b.plays.position)}</div>` : '<div class="muted small" style="margin-bottom:6px">Ghi lệnh trong 💼 Danh mục để tool tính đúng số cổ phiếu cần mua thêm / bán theo vị thế của bạn.</div>'}
+            ${eff.fin?.holder ? holderBlock(eff.fin.holder) : ''}
+            <div class="tbl-wrap">${table(st.hold)}</div>
+          </div>
+        </div>` : ''}
+        <div class="bf-body">
+          <ul class="bf-reasons">${b.reasons.map((r) => `<li data-tone="${r.tone}"><span class="bf-ic" aria-hidden="true">${BRIEF_ICON[r.tone]}</span>${esc(r.text)}</li>`).join('')}</ul>
+          ${l ? ladder(l) : ''}
+        </div>
+      </div>
+    </details>
     ${b.risks.length ? `<div class="bf-risks">⚠ ${b.risks.map(esc).join(' · ')}</div>` : ''}`;
 }
 
@@ -2955,6 +3161,7 @@ $('sector-btn')?.addEventListener('click', showSectors);
 // ---------- Khởi động ứng dụng ----------
 initTheme();
 loadMarket();
+loadMarketRegime();
 loadWatchlist();
 loadAlerts();
 loadMovers();
@@ -2980,6 +3187,24 @@ api('/api/ai/status').catch(() => ({ enabled: false })).then((s) => {
     analyze(initial.toUpperCase());
   } else {
     showPicks();
+  }
+});
+
+// Lắng nghe thay đổi hash để điều hướng SPA mượt mà
+window.addEventListener('hashchange', () => {
+  const h = decodeURIComponent(location.hash.slice(1)).toLowerCase();
+  if (!h) return;
+  if (h === 'tiem-nang' || h === 'picks') {
+    setMobileTab('picks');
+    showPicks();
+  } else if (h === 'danh-muc') {
+    showPortfolio();
+  } else if (h === 'xep-hang') {
+    showRankView();
+  } else if (h === 'nganh') {
+    showSectors();
+  } else if (/^[A-Za-z0-9]{3,8}$/.test(h)) {
+    analyze(h.toUpperCase());
   }
 });
 
@@ -3099,5 +3324,6 @@ setInterval(() => {
   loadWatchlist();
   loadAlerts();
   loadMarket();
+  loadMarketRegime();
   loadMovers();
 }, 120_000);

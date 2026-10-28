@@ -23,8 +23,21 @@ for (const sym of list) {
     console.log(`\n=== ${a.symbol} · ${a.info.name} (${a.info.exchange}) ===`);
     console.log(`Giá: ${p.close} (${p.changePct >= 0 ? '+' : ''}${p.changePct}%) ngày ${p.date}`);
     if (a.ranking) {
-      console.log(`=> ${a.recommendation.label}  | Điểm xếp hạng ${a.ranking.score}/100 (hạng ${a.ranking.position}/${a.ranking.universe}, ${a.ranking.aboveMa200 === false ? 'dưới' : 'trên'} MA200)`);
+      console.log(`=> ${a.recommendation.label}  | Điểm xếp hạng ${a.ranking.score}/100 (hạng ${a.ranking.position}/${a.ranking.universe}, ${a.ranking.aboveMa200 === false ? 'dưới' : 'trên'} MA200)${a.trendPick ? ' ★ TREND PICK' : ''}`);
       console.log(`   ${a.recommendation.desc}`);
+    }
+    if (a.monteCarlo) {
+      const mc = a.monteCarlo;
+      console.log(`   🎲 Monte Carlo (20p): P(tăng) ${Math.round(mc.probUp * 100)}% · P(lãi≥5%) ${Math.round(mc.probGain5 * 100)}% · P(lỗ≥7%) ${Math.round(mc.probLoss7 * 100)}% · R/R ${mc.rr} · Tín hiệu: ${mc.signal}`);
+    }
+    if (a.marketRegime) {
+      console.log(`   🌐 Chế độ thị trường: ${a.marketRegime.label} (Phân phối ${a.marketRegime.distDays}/25 phiên · Khuyến nghị CP: ${a.marketRegime.exposure})`);
+    }
+    if (a.plan?.trailing?.chandelierStop) {
+      console.log(`   🎯 Chặn lãi động: Chandelier ${a.plan.trailing.chandelierStop} · TP1: ${a.plan.trailing.stages.tp1} · TP2: ${a.plan.trailing.stages.tp2}`);
+    }
+    if (a.stockRisk?.isRisky) {
+      console.log(`   🚨 Cảnh báo rủi ro cao: ${a.stockRisk.reasons.join(' · ')} [${a.stockRisk.riskLevel}]`);
     }
     if (a.brief) {
       const b = a.brief, l = b.levels;

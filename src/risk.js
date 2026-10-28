@@ -88,3 +88,69 @@ export function riskBrief(rp) {
   return `Rủi ro 1 năm (${rp.days} phiên): biến động năm ${p(rp.volatility)}, VaR95 1 phiên ${p(rp.var95)}, CVaR95 ${p(rp.cvar95)}, `
     + `sụt giảm tối đa ${p(rp.maxDrawdown)}, phiên tệ nhất ${p(rp.worstDay)}, beta với VN-Index ${rp.beta ?? 'n/a'}, tương quan ${rp.correlation ?? 'n/a'}.`;
 }
+
+/**
+ * Quét nhanh dị thường / bắt dao rơi / lao dốc mạnh (tham khảo Laban _detect_stock_risk).
+ * Trả về cảnh báo rủi ro cao nếu cổ phiếu đang trong đà rơi tự do hoặc thủng sâu MA50.
+ */
+export function detectStockRisk(bars, ticker = '') {
+  if (!bars || bars.length < 21) return { isRisky: false, reasons: [], riskLevel: 'NORMAL' };
+  const closes = bars.map((b) => b.close);
+  const n = closes.length;
+  const lastClose = closes[n - 1];
+  
+  const ret5d = ((lastClose - closes[n - 6]) / closes[n - 6]) * 100;
+  const ret20d = ((lastClose - closes[n - 21]) / closes[n - 21]) * 100;
+
+  const look60 = Math.min(60, bars.length);
+  const high60 = Math.max(...bars.slice(-look60).map((b) => b.high ?? b.close));
+  const dropPeak = ((lastClose - high60) / high60) * 100;
+
+  const reasons = [];
+  // 1. Rơi tự do / lao dốc ngắn/trung hạn
+  if (ret5d <= -12.0) {
+    reasons.push(`Rơi tự do 5 phiên (${ret5d >= 0 ? '+' : ''}${ret5d.toFixed(1)}%)`);
+  } else if (ret20d <= -20.0) {
+    reasons.push(`Lao dốc 20 phiên (${ret20d >= 0 ? '+' : ''}${ret20d.toFixed(1)}%)`);
+  }
+
+  // 2. Sụt giảm nghiêm trọng từ đỉnh 60 phiên
+  if (dropPeak <= -35.0) {
+    reasons.push(`Sụt từ đỉnh 60 phiên (${dropPeak.toFixed(1)}%)`);
+  }
+
+  // 3. Thủng sâu MA50 (> 18% dưới MA50)
+  if (n >= 50) {
+    const ma50 = closes.slice(-50).reduce((s, v) => s + v, 0) / 50;
+    if (lastClose < ma50 * 0.82) {
+      const pctBelow = Math.round((1 - lastClose / ma50) * 100);
+      reasons.push(`Thủng sâu MA50 (-${pctBelow}%)`);
+    }
+  }
+
+  // 4. Giảm sàn liên tiếp (biên độ HOSE sàn khoảng -6.5%)
+  const last10 = bars.slice(-10);
+  let limitDowns = 0;
+  for (let i = 1; i < last10.length; i++) {
+    const cPrev = last10[i - 1].close;
+    const chg = ((last10[i].close - cPrev) / cPrev) * 100;
+    if (chg <= -6.5) limitDowns++;
+  }
+  if (limitDowns >= 2) {
+    reasons.push(`${limitDowns} phiên giảm sàn gần đây`);
+  }
+
+  const isRisky = reasons.length > 0;
+  return {
+    isRisky,
+    ticker,
+    lastClose,
+    ret5d: round(ret5d, 1),
+    ret20d: round(ret20d, 1),
+    dropPeak: round(dropPeak, 1),
+    limitDowns,
+    reasons,
+    riskLevel: !isRisky ? 'NORMAL' : (limitDowns >= 2 || ret5d <= -15 || dropPeak <= -40 ? 'CRITICAL' : 'HIGH'),
+  };
+}
+
