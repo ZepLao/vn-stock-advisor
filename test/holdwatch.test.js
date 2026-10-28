@@ -12,10 +12,10 @@ test('Khung theo dõi danh mục: 9:15–14:50 ngày thường', () => {
   assert.equal(holdWindow(at('2026-10-24', '10:00')), false); // thứ 7
 });
 
-test('Mức cắt lỗ như bản tin: lãi ≥ 10% thì nâng lên giá vốn', () => {
-  const a = (pnlPct) => ({ brief: { levels: { stop: 20, target: 26 } }, holding: { avgCost: 21, pnlPct } });
-  assert.deepEqual(holdLevels(a(0.02)), { stop: 20, target: 26 });
-  assert.deepEqual(holdLevels(a(0.12)), { stop: 21, target: 26 });
+test('Mức theo dõi như bản tin: ngưỡng cảnh báo xa từ giá vốn, không chốt lời theo mục tiêu', () => {
+  const a = (holdStop) => ({ brief: { levels: { stop: 20, target: 26, holdStop } }, holding: { avgCost: 21, pnlPct: 0.12 } });
+  assert.deepEqual(holdLevels(a(17.85)), { stop: 17.85, target: null });
+  assert.deepEqual(holdLevels(a(undefined)), { stop: 20, target: null });
   assert.equal(holdLevels({ brief: {} }), null);
 });
 
@@ -24,7 +24,7 @@ test('Cảnh báo mã đang giữ: cắt lỗ, chốt lời, biến động mạ
   assert.deepEqual(holdingEvents({ close: 24, prevClose: 23.9, ...lv }), []); // bình thường
   assert.deepEqual(keys(holdingEvents({ close: 23.1, prevClose: 23.5, ...lv })), ['nearStop']); // cách 1,3%
   const broke = holdingEvents({ close: 22.5, prevClose: 23.9, ...lv }); // −5,9%
-  assert.match(broke[0].text, /Thủng cắt lỗ.*BÁN/);
+  assert.match(broke[0].text, /Dưới ngưỡng cảnh báo 22,8.*xem lại/);
   assert.deepEqual(keys(broke), ['stop', 'nearStop', 'drop3', 'drop5']); // một tin cho mức nặng nhất
   assert.match(broke[1].text, /Giảm mạnh −5,9%/);
   // đã báo rồi thì không báo lại; giảm tiếp tới sát sàn thì báo mức mới

@@ -9,10 +9,10 @@ const mk = (rows, start = Date.UTC(2026, 9, 1)) => rows.map(([open, high, low, c
 }));
 const flat = (n, p = 10) => Array.from({ length: n }, () => [p, p, p, p]);
 
-test('Chấm lệnh: đóng cửa dưới cắt lỗ thì bán mở cửa phiên sau, chạm chốt lời, hết 20 phiên, chưa đủ phiên', () => {
+test('Chấm lệnh: đóng cửa dưới cắt lỗ thì bán mở cửa phiên sau, chạm chốt lời, hết 40 phiên, chưa đủ phiên', () => {
   const t = { date: '2026-10-01', entry: 10, stop: 9.5, target: 11 };
   // Giá thấp nhất thủng cắt lỗ nhưng đóng cửa trên: chưa bán (như khuyến nghị "đóng cửa dưới")
-  assert.equal(scoreTrade(t, mk([[10, 10, 10, 10], [10, 10.2, 9.4, 9.6], ...flat(25)])).outcome, 'time');
+  assert.equal(scoreTrade(t, mk([[10, 10, 10, 10], [10, 10.2, 9.4, 9.6], ...flat(45)])).outcome, 'time');
   const stop = scoreTrade(t, mk([[10, 10, 10, 10], [10, 10.2, 9.3, 9.4], [9.2, 9.6, 9.1, 9.5], ...flat(25)]));
   assert.equal(stop.outcome, 'stop');
   assert.equal(stop.days, 1);
@@ -23,7 +23,7 @@ test('Chấm lệnh: đóng cửa dưới cắt lỗ thì bán mở cửa phiên
   const tgt = scoreTrade(t, mk([[10, 10, 10, 10], ...flat(3), [10.5, 11.2, 10.4, 11], ...flat(25)]));
   assert.equal(tgt.outcome, 'target');
   assert.equal(tgt.ret, 11 / 10 - 1);
-  assert.equal(scoreTrade(t, mk([[10, 10, 10, 10], ...flat(25, 10.3)])).outcome, 'time');
+  assert.equal(scoreTrade(t, mk([[10, 10, 10, 10], ...flat(45, 10.3)])).outcome, 'time');
   const pending = scoreTrade(t, mk([[10, 10, 10, 10], ...flat(5, 10.3)]));
   assert.equal(pending.matured, false);
 });

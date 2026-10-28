@@ -74,9 +74,9 @@ test('evaluateMarketRegime: không đếm nến trong phiên là ngày phân ph�
   assert.equal(evaluateMarketRegime(partial).distDays, 0);
 });
 
-test('sanitizePriority: tối đa 2 mã một ngành, mã trần tỷ trọng 0 chuyển ĐỂ SAU', () => {
+test('sanitizePriority: tối đa 3 mã một ngành, mã trần tỷ trọng 0 chuyển ĐỂ SAU', () => {
   const f = (symbol, sector, maxWeightPct = 10) => ({ symbol, sector, maxWeightPct, zone: 'trong vùng mua', final: 'NÊN MUA', rankScore: 80, riskReward: 2 });
-  const facts = [f('HPG', 'Thép'), f('HSG', 'Thép'), f('NKG', 'Thép'), f('FPT', 'Công nghệ', 0)];
+  const facts = [f('HPG', 'Thép'), f('HSG', 'Thép'), f('POM', 'Thép'), f('NKG', 'Thép'), f('FPT', 'Công nghệ', 0)];
   const out = sanitizePriority({ items: facts.map((x) => ({ symbol: x.symbol, tier: 'NEN_MUA', weightPct: 8, reason: 'x' })) }, facts);
   const by = Object.fromEntries(out.items.map((x) => [x.symbol, x]));
   assert.equal(by.NKG.tier, 'CHUA_MUA');

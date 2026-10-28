@@ -12,7 +12,7 @@ export const TIERS = {
   DAU_CO: { label: 'ĐẦU CƠ · thăm dò nhỏ', icon: '🎲', share: 0.4 },
   CHUA_MUA: { label: 'ĐỂ SAU', icon: '💤', share: 0 },
 };
-export const PRIO_RULES = { maxTop: 2, specMax: 0.05, totalMax: 0.5, cautionTotal: 0.3, maxPerSector: 2 };
+export const PRIO_RULES = { maxTop: 2, specMax: 0.05, totalMax: 0.5, cautionTotal: 0.3, maxPerSector: 3 };
 
 const r1 = (v) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10) / 10);
 const pct = (v) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 1000) / 10);

@@ -35,11 +35,8 @@ export function holdWindow(now = new Date()) {
 export function holdLevels(a) {
   const L = a.brief?.levels, h = a.holding;
   if (!L || !h) return null;
-  // Cắt lỗ neo từ ngày mua, chỉ nâng (holderStop trong tradeplan.js); a.plan.trailing tính theo giá hôm nay nên không dùng
-  const stop = L.holdStop ?? (L.stop != null ? (h.pnlPct >= 0.1 ? Math.max(L.stop, h.avgCost) : L.stop) : null);
-  const out = { stop, target: L.target ?? null };
-  if (a.plan?.trailing?.chandelierStop != null) out.chandelierStop = a.plan.trailing.chandelierStop;
-  return out;
+  // Quy tắc không cắt lỗ sát, không chốt lời theo mục tiêu: chỉ ngưỡng cảnh báo xa −15% giá vốn (brief.js / tradeplan.js)
+  return { stop: L.holdStop ?? L.stop ?? null, target: null };
 }
 
 /**
@@ -50,7 +47,7 @@ export function holdingEvents({ close, prevClose, stop, target, chandelierStop }
   const out = [];
   const fresh = (k) => !sent.includes(k);
   if (stop != null && close < stop) {
-    if (fresh('stop')) out.push({ keys: ['stop', 'nearStop'], tone: 'down', text: `🔴 Thủng cắt lỗ ${num(stop)} → <b>BÁN theo kế hoạch</b>` });
+    if (fresh('stop')) out.push({ keys: ['stop', 'nearStop'], tone: 'down', text: `⚠️ Dưới ngưỡng cảnh báo ${num(stop)} (−15% giá vốn) → <b>xem lại lý do nắm giữ</b>` });
   } else if (stop != null && close <= stop * (1 + R.nearStop) && fresh('nearStop')) {
     out.push({ keys: ['nearStop'], tone: 'warn', text: `⚠️ Sát cắt lỗ ${num(stop)} (còn ${sgn((stop / close - 1) * 100)}) → chuẩn bị bán nếu thủng` });
   } else if (chandelierStop != null && close < chandelierStop && fresh('chandelier')) {

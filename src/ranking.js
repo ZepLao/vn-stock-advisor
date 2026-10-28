@@ -56,6 +56,19 @@ export const MODELS = {
   },
 };
 
+/**
+ * ⛔ Tránh: 10% thấp nhất của rổ theo tổ hợp 6 yếu tố (4 yếu tố v1 + biến động 60 phiên thấp + không có phiên tăng đột
+ * biến). Kiểm chứng 4 năm theo thời điểm (đăng ký quy tắc trước: t ≤ −2 và âm ở cả hai nửa): nhóm này kém rổ −1,28%/20
+ * phiên (t −2,5; hai nửa −1,34% / −1,21%), khoảng −16%/năm — cùng kết luận với Laban (⛔ kém bình quân ~15%/năm).
+ * v1 riêng (t −1,9) và v2 riêng (t −1,8) không đạt.
+ */
+export const AVOID_FACTORS = [...FACTORS, { key: 'ivol', label: 'Biến động 60 phiên thấp', sign: -1 }, { key: 'maxret', label: 'Không có phiên tăng đột biến', sign: -1 }];
+export const AVOID_PCT = 0.1;
+const avoidInputs = (f, bars) => {
+  const p = factorPanel(bars)(bars.length - 1);
+  return f && p ? { ...f, ivol: p.ivol, maxret: p.maxret } : null;
+};
+
 /** Trả hàm đọc giá trị các yếu tố tại phiên i (chỉ dùng dữ liệu đến phiên i). */
 export function factorReader(bars) {
   const c = bars.map((b) => b.close);
@@ -248,15 +261,22 @@ export function getRankBoard() {
       if (value20 < minValue) return; // chưa đạt thanh khoản trung bình 20 phiên
       const f = factorReader(bars)(bars.length - 1);
       const trend = trendFeatures(bars);
-      if (f) rows.push({ symbol: uni[k].symbol, exchange: uni[k].exchange, f, trend, value20, date: bars.at(-1).time, changePct: round((bars.at(-1).close / bars.at(-2).close - 1) * 100) });
+      if (f) rows.push({ symbol: uni[k].symbol, exchange: uni[k].exchange, f, f6: avoidInputs(f, bars), trend, value20, date: bars.at(-1).time, changePct: round((bars.at(-1).close / bars.at(-2).close - 1) * 100) });
     });
     const ref = buildRef(rows.map((r) => r.f));
+    // ⛔: điểm 6 yếu tố và ngưỡng 10% thấp nhất của rổ
+    const ref6 = buildRef(rows.map((r) => r.f6), AVOID_FACTORS);
+    const s6 = rows.map((r) => compositeScore(r.f6, ref6, AVOID_FACTORS)?.score ?? null);
+    const sorted6 = s6.filter((v) => v != null).sort((a, b) => a - b);
+    const avoidCut = sorted6.length ? sorted6[Math.max(0, Math.ceil(sorted6.length * AVOID_PCT) - 1)] : null;
+    rows.forEach((r, k) => { r.score6 = s6[k]; });
     const board = rows.map((r) => {
       const cs = compositeScore(r.f, ref);
       return {
         symbol: r.symbol, exchange: r.exchange, close: r.f.close, changePct: r.changePct, date: r.date, value20: Math.round(r.value20),
         score: cs?.score ?? null, parts: cs?.parts ?? null, aboveMa200: r.f.aboveMa200, trend: r.trend,
         factors: { mom: round(r.f.mom, 4), high: round(r.f.high, 4), atr: round(r.f.atr, 4), adx: round(r.f.adx, 1) },
+        score6: r.score6, avoid: r.score6 != null && avoidCut != null && r.score6 <= avoidCut,
         ...rankLabel(cs?.score, r.f.aboveMa200),
       };
     }).filter((r) => r.score != null).sort((a, b) => b.score - a.score);
@@ -267,7 +287,7 @@ export function getRankBoard() {
     recordMany(board.filter((r) => r.aboveMa200 !== false).slice(0, 8).map((r) => ({
       source: 'rank_top', symbol: r.symbol, date: r.date, direction: 1, label: `Top xếp hạng (${r.score})`, price: r.close, score: r.score,
     })));
-    return { date: rows.reduce((m, r) => (r.date > m ? r.date : m), ''), universe: board.length, criteria: screenCriteria(), ref, rows: board, updatedAt: new Date().toISOString() };
+    return { date: rows.reduce((m, r) => (r.date > m ? r.date : m), ''), universe: board.length, criteria: screenCriteria(), ref, ref6, avoidCut, rows: board, updatedAt: new Date().toISOString() };
   });
 }
 
@@ -278,6 +298,7 @@ export async function rankSymbol(symbol, bars) {
   const cs = compositeScore(f, board.ref);
   if (!cs) return null;
   const trend = trendFeatures(bars);
+  const score6 = board.ref6 ? compositeScore(avoidInputs(f, bars), board.ref6, AVOID_FACTORS)?.score ?? null : null;
   const better = board.rows.filter((r) => r.symbol !== symbol && r.score > cs.score).length;
   // Hạng trong nhóm trên MA200 (nhóm danh mục chọn mua / giữ)
   const pfRank = f.aboveMa200 === false ? null
@@ -309,6 +330,7 @@ export async function rankSymbol(symbol, bars) {
     trend,
     vol60PctRank,
     trendPick,
+    score6, avoid: score6 != null && board.avoidCut != null && score6 <= board.avoidCut,
     ...rankLabel(cs.score, f.aboveMa200),
   };
 }

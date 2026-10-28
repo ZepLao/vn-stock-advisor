@@ -27,26 +27,27 @@ test('Tách tin dài theo dòng, mỗi phần không quá giới hạn', () => {
   assert.equal(parts.join('\n'), text);
 });
 
-test('Dòng mã đang giữ: thoát ký tự < cho HTML của Telegram, nâng cắt lỗ khi lãi ≥ 10%', () => {
-  const a = (close, pnlPct) => ({ symbol: 'VTP', price: { close }, holding: { avgCost: 46.8, pnlPct }, brief: { code: 'HOLD', levels: { stop: 42.6, target: 52 } } });
-  assert.equal(holdingLine(a(47.35, 0.008)), '▸ <b>VTP</b>  <b>47,35</b> (lãi <b>+0,8%</b>)\n  👉 🟢 Giữ · cắt &lt; 42,6');
-  assert.match(holdingLine(a(51.5, 0.1)), /cắt &lt; 46,8/);
-  assert.match(holdingLine(a(42, -0.1)), /BÁN<\/b> \(thủng 42,6\)/);
-  // Quyết định cuối sau AI được ưu tiên hơn khuyến nghị hệ thống
-  assert.match(holdingLine(a(47.35, 0.008), 'AVOID'), /Giảm khi hồi · cắt &lt; 42,6/);
+test('Dòng mã đang giữ: thoát ký tự < cho HTML của Telegram, giữ đến 40 phiên, cảnh báo −15%, ⛔ cân nhắc bán', () => {
+  const a = (close, pnlPct, held = 12) => ({ symbol: 'VTP', price: { close }, holding: { avgCost: 46.8, pnlPct }, brief: { code: 'HOLD', levels: { stop: 42.6, holdStop: 39.75, heldSessions: held, holdSessions: 40 } } });
+  assert.equal(holdingLine(a(47.35, 0.008)), '▸ <b>VTP</b>  <b>47,35</b> (lãi <b>+0,8%</b>)\n  👉 🟡 Giữ đến đủ 40 phiên (12/40 phiên) · cảnh báo &lt; 39,75');
+  assert.match(holdingLine(a(47.35, 0.008, 41)), /Bán<\/b> \(đủ 40 phiên, không còn trong nhóm mua\)/);
+  assert.match(holdingLine(a(39, -0.17)), /Dưới ngưỡng −15%<\/b> \(39,75\)/);
+  assert.match(holdingLine(a(47.35, 0.008), 'BUY'), /Giữ \(vẫn trong nhóm mua\)/);
+  // Quyết định cuối sau AI được ưu tiên hơn khuyến nghị hệ thống; ⛔ thì cân nhắc bán
+  assert.match(holdingLine({ ...a(47.35, 0.008), ranking: { avoid: true } }, 'AVOID'), /⛔ Cân nhắc bán/);
   assert.match(holdingLine(a(47.35, 0.008), 'HOLD', { noAi: true }), /\(chưa qua AI\)/);
 });
 
-test('Dòng mã mua: 2 dòng gọn, ngành + thăm dò, vùng mua / chờ giá, % tới chốt và cắt', () => {
-  const a = (close) => ({ symbol: 'DHC', price: { close }, sector: { name: 'Sản xuất giấy' }, brief: { levels: { buyFrom: 38.25, buyTo: 38.8, stop: 35.75, target: 42 } } });
+test('Dòng mã mua: 2 dòng gọn, ngành + thăm dò, lệnh LO giá đóng cửa, giữ ~40 phiên, cảnh báo −15%', () => {
+  const a = (close) => ({ symbol: 'DHC', price: { close }, sector: { name: 'Sản xuất giấy' }, brief: { levels: { buyFrom: 38.8, buyTo: 38.8, stop: 32.95, holdSessions: 40 } } });
   assert.equal(buyLine(a(38.8), { code: 'ACCUMULATE' }), [
     '▸ <b>DHC</b>  <b>38,8</b> · <i>Sản xuất giấy · thăm dò</i>',
-    '  🎯 Mua <b>38,25–38,8</b>',
-    '  🚀 Chốt 42 (+8%) · 🛡️ Cắt 35,75 (−8%)',
+    '  🎯 LO <b>38,8</b> (giá đóng cửa)',
+    '  ⏳ Giữ ~40 phiên · ⚠️ Cảnh báo &lt; 32,95 (−15%)',
   ].join('\n'));
-  assert.match(buyLine(a(40), { code: 'BUY' }), /Chờ về <b>38,25–38,8<\/b>/);
-  assert.equal(zoneState(38.5, a(0).brief.levels), 'buy');
-  assert.equal(zoneState(35, a(0).brief.levels), 'broken');
+  assert.match(buyLine(a(40), { code: 'BUY' }), /Chờ về LO <b>38,8<\/b>/);
+  assert.equal(zoneState(38.8, a(0).brief.levels), 'buy');
+  assert.equal(zoneState(32, a(0).brief.levels), 'broken');
 });
 
 test('VN-Index: nói rõ là xu hướng trung hạn', () => {

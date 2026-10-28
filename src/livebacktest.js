@@ -249,8 +249,8 @@ export function simulateLive(cal, data, o) {
       if (!(W > 0)) continue;
       const vAvg = d.bars.slice(Math.max(0, i - 19), i + 1).reduce((a, b) => a + b.volume, 0) / Math.min(20, i + 1);
       const steps = tradeSteps('BUY', L, { weight: W, rsi: d.rsi[i], avgVol20: vAvg, ma200: d.inp.ma200[i], score: scoreOf.get(x.s), aboveMa200: true });
-      const legs = steps.fresh.filter((st) => st.side === 'buy').map((st) => (st.zone
-        ? { type: 'limit', price: st.zone[1], budget: st.portion * capital }
+      const legs = steps.fresh.filter((st) => st.side === 'buy').map((st) => (st.zone || st.price != null
+        ? { type: 'limit', price: st.zone ? st.zone[1] : st.price, budget: st.portion * capital }
         : { type: 'breakout', trigger: L.r1, budget: st.portion * capital }));
       orders.set(x.s, { legs, expires: t + R.entryDays, stop: L.stop, target });
       stats.legsPlaced += legs.length;

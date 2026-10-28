@@ -91,3 +91,19 @@ export function accountCapital() {
   const v = Number(process.env.ACCOUNT_CAPITAL);
   return v > 0 ? v : null;
 }
+
+/**
+ * Tỷ trọng theo SUẤT cho quy tắc mua đang dùng (danh mục cuốn chiếu, không cắt lỗ sát nên không định cỡ theo khoảng cách
+ * cắt lỗ): một suất = 1/slots vốn, tối đa `slots` mã, mỗi ngành tối đa `perSector` mã, và (nếu biết vốn) không quá
+ * maxAdv × giá trị khớp TB20 phiên. Backtest: chia đều suất ngang hoặc hơn tỷ trọng ngược biến động (rolling.js).
+ * @param {{ value20?: number, capital?: number|null, sector?: { name: string, count: number }|null }} ctx
+ */
+export const SLOT_RULES = { slots: 10, perSector: 3, maxAdv: SIZING.maxAdv };
+export function slotSize({ value20 = null, capital = null, sector = null } = {}, R = SLOT_RULES) {
+  const p = (v) => `${(Math.round(v * 1000) / 10).toLocaleString('vi-VN')}%`;
+  const limits = [{ key: 'slot', weight: 1 / R.slots, text: `1 suất = ${p(1 / R.slots)} vốn (tối đa ${R.slots} mã)` }];
+  if (capital > 0 && value20 > 0) limits.push({ key: 'liquidity', weight: (R.maxAdv * value20) / capital, text: `thanh khoản: ≤ ${p(R.maxAdv)} giá trị khớp TB20 phiên` });
+  if (sector && sector.count >= R.perSector) limits.push({ key: 'sectorCount', weight: 0, text: `đã giữ ${sector.count} mã ngành ${sector.name} (tối đa ${R.perSector})` });
+  const bind = limits.reduce((m, x) => (x.weight < m.weight ? x : m));
+  return { weight: Math.max(0, Math.round(bind.weight * 1000) / 1000), binding: bind.key, limits: limits.map((x) => ({ ...x, weight: r4(x.weight) })) };
+}

@@ -11,7 +11,7 @@ import { logTelegramReport } from './db.js';
 import { getTuning } from './tuning.js';
 import { recordTrades } from './selfreview.js';
 import { getSectorFlows } from './sectors.js';
-import { sectorMap, orderBySector, junkCheck, rewardCheck, sectorLeaders } from './picks.js';
+import { sectorMap, orderBySector, junkCheck, sectorLeaders } from './picks.js';
 import { prioritizePicks, TIERS } from './prioritize.js';
 
 const FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'telegram.json');
@@ -112,8 +112,8 @@ const IND = '  '; // Thụt lề 2 ký tự chuẩn thay vì non-breaking spaces
 /**
  * Mã gợi ý mua, mỗi mã một khối gọn gàng, trực quan:
  *   ▸ DHC  38,8 · Sản xuất giấy · thăm dò
- *     🎯 Mua 38,25–38,8
- *     🚀 Chốt 42 (+8%) · 🛡️ Cắt 35,75 (−8%)
+ *     🎯 LO 38,8 (giá đóng cửa)
+ *     ⏳ Giữ ~40 phiên · ⚠️ Cảnh báo &lt; 32,95 (−15%)
  */
 export function buyLine(a, final, { aiNo = false } = {}) {
   const L = buyLevels(a, aiNo ? null : final);
@@ -125,16 +125,16 @@ export function buyLine(a, final, { aiNo = false } = {}) {
   const tagStr = tags.length ? ` · <i>${tags.join(' · ')}</i>` : '';
   const out = [`▸ <b>${esc(a.symbol)}</b>  <b>${num(close)}</b>${tagStr}`];
   if (L) {
-    const zone = `<b>${num(L.buyFrom)}–${num(L.buyTo)}</b>`;
+    const zone = L.buyFrom === L.buyTo ? `LO <b>${num(L.buyTo)}</b> (giá đóng cửa)` : `<b>${num(L.buyFrom)}–${num(L.buyTo)}</b>`;
     const st = zoneState(close, L);
-    const where = st === 'buy' ? `🎯 Mua ${zone}`
+    const where = st === 'buy' ? `🎯 ${L.buyFrom === L.buyTo ? '' : 'Mua '}${zone}`
       : st === 'wait' ? `⏳ Chờ về ${zone}`
       : st === 'unstable' ? '⚠️ Chờ ổn định lại'
-      : st === 'broken' ? '⛔ Thủng cắt lỗ, bỏ qua' : '';
+      : st === 'broken' ? '⛔ Dưới ngưỡng cảnh báo, bỏ qua' : '';
     if (where) out.push(`${IND}${where}`);
     const lv = [
-      L.target != null && `🚀 Chốt ${num(L.target)} (${pctTo(close, L.target)})`,
-      L.stop != null && `🛡️ Cắt ${num(L.stop)} (${pctTo(close, L.stop)})`,
+      `⏳ Giữ ~${L.holdSessions ?? 40} phiên`,
+      L.stop != null && `⚠️ Cảnh báo &lt; ${num(L.stop)} (${pctTo(close, L.stop)})`,
     ].filter(Boolean);
     if (lv.length) out.push(`${IND}${lv.join(' · ')}`);
   }
@@ -152,7 +152,8 @@ export function buyLevels(a, final) {
 /** Bản ghi để tự đánh giá sau này (selfreview.js). */
 export function tradeRecord(a, final, status) {
   const L = buyLevels(a, status === 'pick' ? final : null);
-  return { symbol: a.symbol, date: a.price.date, entry: a.price.close, stop: L?.stop ?? null, target: L?.target ?? null,
+  // Quy tắc không có chốt lời: chấm lại bằng ngưỡng cảnh báo xa và thời hạn giữ (selfreview RULES.hold)
+  return { symbol: a.symbol, date: a.price.date, entry: a.price.close, stop: L?.stop ?? null, target: null,
     buyFrom: L?.buyFrom ?? null, buyTo: L?.buyTo ?? null, code: final?.code ?? null, status };
 }
 
@@ -162,15 +163,19 @@ export function tradeRecord(a, final, status) {
  */
 export function holdingLine(a, code = a.brief?.code, { noAi = false, final = null, detailed = false } = {}) {
   const h = a.holding, L = a.brief?.levels, close = a.price.close;
-  // Cắt lỗ neo từ ngày mua, chỉ nâng (holderStop); chưa có vị thế thật thì dùng bậc thang hôm nay
-  const stop = L?.holdStop ?? (L?.stop != null ? (h?.pnlPct >= 0.1 ? Math.max(L.stop, h.avgCost) : L.stop) : null);
-  const cut = stop != null ? ` · cắt &lt; ${num(stop)}` : '';
+  // Quy tắc: không cắt lỗ sát; cảnh báo khi dưới −15% giá vốn; giữ ~40 phiên, đến hạn mà rời nhóm mua thì bán; ⛔ cân nhắc bán
+  const stop = L?.holdStop ?? L?.stop ?? null;
+  const cut = stop != null ? ` · cảnh báo &lt; ${num(stop)}` : '';
+  const N = L?.holdSessions ?? 40, held = L?.heldSessions;
+  const due = held != null && held >= N;
+  const heldTxt = held != null ? ` (${held}/${N} phiên)` : '';
   let todo;
-  if (stop != null && close < stop) todo = `🔴 <b>BÁN</b> (thủng ${num(stop)})`;
-  else if (code === 'SELL') todo = '🔴 <b>Hạ tỷ trọng</b>';
-  else if (code === 'AVOID') todo = `⚠️ Giảm khi hồi${cut}`;
-  else if (L?.target && close >= L.target) todo = `🟢 Chốt lời 1/3${cut}`;
-  else todo = `🟢 Giữ${cut}`;
+  if (stop != null && close < stop) todo = `⚠️ <b>Dưới ngưỡng −15%</b> (${num(stop)}): xem lại lý do nắm giữ`;
+  else if (code === 'SELL') todo = '🔴 <b>Bán</b> (rủi ro rơi tự do)';
+  else if (code === 'AVOID' && a.ranking?.avoid) todo = '🔴 <b>⛔ Cân nhắc bán</b> (10% thấp nhất)';
+  else if ((code === 'AVOID' || code === 'HOLD') && due) todo = `🔴 <b>Bán</b> (đủ ${N} phiên, không còn trong nhóm mua)`;
+  else if (code === 'AVOID' || code === 'HOLD') todo = `🟡 Giữ đến đủ ${N} phiên${heldTxt}${cut}`;
+  else todo = `🟢 Giữ (vẫn trong nhóm mua)${heldTxt}${cut}`;
 
   const pnlTag = h?.pnlPct != null ? (h.pnlPct >= 0 ? `lãi <b>${sgn(h.pnlPct * 100)}</b>` : `lỗ <b>${sgn(h.pnlPct * 100)}</b>`) : '';
   const lines = [`▸ <b>${esc(a.symbol)}</b>  <b>${num(close)}</b>${pnlTag ? ` (${pnlTag})` : ''}`];
@@ -253,7 +258,7 @@ export async function buildReport(kind = 'close') {
   const pool = orderBySector(board.rows.filter((r) => r.pfRank != null && r.score >= 70 && !held.has(r.symbol)), sectors)
     .slice(0, buyCount + 8).map((r) => r.symbol);
   // Khi tự đánh giá thấy AI loại sai nhiều hơn đúng (aiVeto tắt), mã AI không đồng ý vẫn được liệt kê kèm ghi chú.
-  const picks = [], rejected = [], trades = [], junk = [], lowReward = [];
+  const picks = [], rejected = [], trades = [], junk = [];
   for (const a of await analyzeAll(pool)) {
     if (picks.length >= buyCount) break;
     if (!BUY_CODES.includes(a.brief?.code)) continue;
@@ -262,8 +267,6 @@ export async function buildReport(kind = 'close') {
     const final = await judge(a);
     if (!final) continue;
     const ok = BUY_CODES.includes(final.code);
-    const rw = rewardCheck(a.price.close, buyLevels(a, ok ? final : null));
-    if (ok && !rw.ok) { lowReward.push({ symbol: a.symbol, reward: rw.reward }); continue; }
     trades.push(tradeRecord(a, final, ok ? 'pick' : 'rejected'));
     if (ok) picks.push({ a, final });
     else if (!tune.aiVeto) picks.push({ a, final, aiNo: true });
@@ -309,7 +312,6 @@ export async function buildReport(kind = 'close') {
   for (const s of held) status.set(s, 'Đang giữ');
   for (const s of rejected) status.set(s, 'AI loại');
   for (const x of junk) status.set(x.symbol, 'Chất lượng kém');
-  for (const x of lowReward) status.set(x.symbol, 'Biên lợi nhuận thấp');
   const leaderStatus = (l) => status.get(l.symbol)
     || (l.score >= 70 ? (l.aboveMa200 === false ? 'Chờ vượt MA200' : 'Theo dõi') : 'Chưa đủ mạnh');
   const lead = sectorLeaders(flows, board.rows);
@@ -361,7 +363,6 @@ export async function buildReport(kind = 'close') {
   const skipped = [
     rejected.length && `• ${rejected.map(esc).join(', ')}: AI loại sau phản biện`,
     junk.length && `• ${junk.map((x) => `${esc(x.symbol)} (${esc(x.reason)})`).join(', ')}`,
-    lowReward.length && `• ${lowReward.map((x) => esc(x.symbol)).join(', ')}: Lời kỳ vọng &lt; 4%`,
   ].filter(Boolean);
   if (skipped.length) lines.push('', DIVIDER, '🛡️ <b>MÃ ĐÃ LỌC BỎ / RỦI RO</b>', ...skipped.map((x) => `<i>${x}</i>`));
   if (unverified.length) lines.push('', `⚠️ <i>AI chưa thẩm định kịp: ${unverified.map(esc).join(', ')}</i>`);

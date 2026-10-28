@@ -14,7 +14,7 @@ import { getTuning } from './tuning.js';
 import { recordTrades } from './selfreview.js';
 import { telegramConfig, sendMessage, aiFinal, buyLevels, buyLine, tradeRecord, marketLine, esc, num } from './telegram.js';
 import { getSectorFlows } from './sectors.js';
-import { sectorMap, orderBySector, junkCheck, rewardCheck } from './picks.js';
+import { sectorMap, orderBySector, junkCheck } from './picks.js';
 import { getMarketRegime } from './regime.js';
 
 const DATA = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
@@ -207,7 +207,6 @@ export async function radarTick({ force = false } = {}) {
       if (!ok && tune.aiVeto) { st.rejected.push(sym); continue; }
       // Vùng mua của quyết định cuối có thể hẹp hơn kế hoạch hệ thống: kiểm lại
       if (ok && !inBuyZone(a.price.close, buyLevels(a, final))) continue;
-      if (ok && !rewardCheck(a.price.close, buyLevels(a, final)).ok) continue; // lời kỳ vọng < 4%: không đáng vào lệnh
       const rank = board.rows.find((r) => r.symbol === sym);
       const text = radarMessage(a, final, rank, market, { aiNo: !ok });
       st.sent.push(sym);

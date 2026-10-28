@@ -1,8 +1,8 @@
 // Tóm tắt nhanh cho một mã: kết luận, việc nên làm, 4-5 lý do ngắn có số liệu, mức giá và rủi ro.
 // Dựng hoàn toàn từ dữ liệu đã tính (không cần AI) để đọc lướt là hiểu.
-import { priceLevels, tradeSteps, holderStop } from './tradeplan.js';
+import { priceLevels, tradeSteps, HOLD_RULE, tick } from './tradeplan.js';
 import { getTuning } from './tuning.js';
-import { positionSize } from './sizing.js';
+import { positionSize, slotSize } from './sizing.js';
 
 export { positionSize };
 
@@ -10,12 +10,14 @@ const pct = (v, d = 0) => (v == null || !Number.isFinite(v) ? '–' : `${v > 0 ?
 const ty = (v) => (v == null ? '–' : `${v > 0 ? '+' : ''}${(v / 1e9).toLocaleString('vi-VN', { maximumFractionDigits: Math.abs(v) >= 1e11 ? 0 : 1 })} tỷ`);
 const num = (v, d = 1) => (v == null || !Number.isFinite(v) ? '–' : v.toLocaleString('vi-VN', { maximumFractionDigits: d }));
 
+// Câu hành động theo quy tắc đang dùng (tradeplan.js HOLD_RULE): mua một suất bằng LO giá đóng cửa, giữ ~40 phiên,
+// không cắt lỗ sát (chỉ cảnh báo xa −15%)
 const ACTIONS = {
-  BUY: (l) => (l.blocked ? `Tín hiệu mua nhưng không mở vị thế mới: ${l.blocked}.` : `Có thể mua, tối đa ${l.size} vốn; cắt lỗ nếu đóng cửa dưới ${l.stop}.`),
-  ACCUMULATE: (l) => (l.blocked ? `Tín hiệu mua thăm dò nhưng không mở vị thế mới: ${l.blocked}.` : `Chỉ mua thăm dò, tối đa ${l.half} vốn; cắt lỗ dưới ${l.stop}.`),
-  HOLD: (l) => `Chưa mua mới. Đang có thì giữ, bán nếu đóng cửa dưới ${l.stop}.`,
-  AVOID: (l) => `Không mua mới. Đang có thì cân nhắc giảm, nhất là khi thủng ${l.stop}.`,
-  SELL: () => 'Không mua. Đang có nên hạ tỷ trọng.',
+  BUY: (l) => (l.blocked ? `Tín hiệu mua nhưng không mở vị thế mới: ${l.blocked}.` : `Có thể mua một suất (${l.size} vốn) bằng lệnh LO giá ${l.close}; giữ khoảng ${HOLD_RULE.sessions} phiên, cảnh báo nếu đóng cửa dưới ${l.stop}.`),
+  ACCUMULATE: (l) => (l.blocked ? `Tín hiệu mua thăm dò nhưng không mở vị thế mới: ${l.blocked}.` : `Chỉ mua thăm dò nửa suất (${l.half} vốn) bằng lệnh LO giá ${l.close}; giữ khoảng ${HOLD_RULE.sessions} phiên.`),
+  HOLD: () => `Chưa mua mới. Đang có thì giữ đến đủ ${HOLD_RULE.sessions} phiên rồi xem lại.`,
+  AVOID: (l) => (l.avoid ? '⛔ Không mua. Đang có thì cân nhắc bán ở phiên tới.' : `Không mua mới. Đang có thì giữ đến đủ ${HOLD_RULE.sessions} phiên rồi bán nếu chưa vào nhóm mua.`),
+  SELL: () => 'Không mua. Đang có nên bán ở phiên tới (rủi ro rơi tự do).',
 };
 
 /**
@@ -28,42 +30,38 @@ const ACTIONS = {
 export function playbook(code, c) {
   const n = (v, d = 2) => num(v, d);
   const w = c.weight != null ? Math.round(c.weight * 100) : 10;
-  const hot = (c.rsi ?? 0) > 70;
+  const N = HOLD_RULE.sessions;
   const missing = [];
-  if (c.score != null && c.score < 70) missing.push(`điểm xếp hạng lên ≥ 70 (hiện ${c.score})`);
-  if (c.aboveMa200 === false && c.ma200) missing.push(`giá vượt lên trên MA200 ${n(c.ma200)} (hiện ${n(c.close)})`);
+  if (c.avoid) missing.push('ra khỏi nhóm ⛔ (10% thấp nhất)');
+  else {
+    if (c.score != null && c.score < 70) missing.push(`điểm xếp hạng lên ≥ 70 (hiện ${c.score}) hoặc vào nhóm xu hướng chuẩn`);
+    if (c.aboveMa200 === false && c.ma200) missing.push(`giá vượt lên trên MA200 ${n(c.ma200)} (hiện ${n(c.close)})`);
+  }
   const waitFor = missing.length ? `Chờ ${missing.join(' và ')}` : 'Chờ tín hiệu rõ hơn';
+  const held = c.heldSessions != null ? ` (đã giữ ${c.heldSessions}/${N} phiên)` : '';
+  const due = c.heldSessions != null && c.heldSessions >= N;
 
   let newBuyer, holder;
   switch (code) {
     case 'BUY':
-      newBuyer = [
-        hot ? `Không mua đuổi (RSI ${n(c.rsi, 0)} đang nóng): đặt mua khi giá lùi về ${n(c.buyFrom)}–${n((c.buyFrom + c.buyTo) / 2)}`
-          : `Mua trong vùng ${n(c.buyFrom)}–${n(c.buyTo)}, chia 2 lần: 1/2 ngay, 1/2 khi giá vượt ${n(c.resistance)} kèm khối lượng lớn`,
-        `Tổng tỷ trọng tối đa ${w}% vốn`,
-        `Đặt cắt lỗ ${n(c.stop)}; chốt lời 1/3 ở ${n(c.target)}`,
-      ];
-      holder = [
-        'Tiếp tục nắm giữ',
-        `Có thể mua thêm nếu tỷ trọng còn dưới ${w}% vốn${hot ? ', nhưng đợi giá chỉnh' : ''}`,
-        `Chốt lời 1/3 ở ${n(c.target)}; bán nếu đóng cửa dưới ${n(c.stop)}`,
-      ];
-      break;
     case 'ACCUMULATE':
-      newBuyer = [`Chỉ mua thăm dò, tối đa ${Math.max(5, Math.round(w / 2))}% vốn trong vùng ${n(c.buyFrom)}–${n(c.buyTo)}`, `Cắt lỗ ${n(c.stop)}`];
-      holder = ['Giữ, chưa mua thêm', `Bán nếu đóng cửa dưới ${n(c.stop)}`];
+      newBuyer = [
+        `Mua một lần bằng lệnh LO giá ${n(c.close)} cho phiên tới, ${code === 'BUY' ? `một suất ${w}% vốn` : `nửa suất ${Math.max(1, Math.round(w / 2))}% vốn`}; không khớp thì xét lại phiên sau, không đuổi giá`,
+        `Giữ khoảng ${N} phiên rồi xem lại; cảnh báo nếu đóng cửa dưới ${n(c.stop)} (−${Math.round(HOLD_RULE.wideStop * 100)}%), không cắt lỗ sát`,
+      ];
+      holder = [`Giữ: vẫn trong nhóm mua${held}`, 'Không mua thêm quá một suất, không bình quân giá xuống'];
       break;
     case 'HOLD':
       newBuyer = ['Chưa mua', `${waitFor} thì mới xem xét mua`];
-      holder = ['Giữ, không mua thêm', `Bán nếu đóng cửa dưới ${n(c.stop)}`, `Chốt lời một phần ở ${n(c.target)}`];
+      holder = [due ? `Đã giữ đủ ${N} phiên và không còn trong nhóm mua: bán ở phiên tới` : `Giữ đến đủ ${N} phiên${held} rồi xem lại`, 'Không mua thêm'];
       break;
     case 'AVOID':
       newBuyer = ['Không mua', `${waitFor} thì mới xem xét lại`];
-      holder = [`Giảm tỷ trọng khi giá hồi lên gần ${n(c.resistance)}`, `Bán hết nếu đóng cửa dưới ${n(c.stop)}`, 'Không mua bình quân giá xuống'];
+      holder = [c.avoid ? '⛔ Thuộc 10% thấp nhất: cân nhắc bán ở phiên tới' : due ? `Đã giữ đủ ${N} phiên: bán ở phiên tới` : `Giữ đến đủ ${N} phiên${held} rồi bán nếu chưa vào nhóm mua`, 'Không mua bình quân giá xuống'];
       break;
     default: // SELL
       newBuyer = ['Tránh mã này'];
-      holder = ['Hạ tỷ trọng sớm, không chờ hồi', 'Không mua bình quân giá xuống'];
+      holder = ['Rủi ro rơi tự do: bán ở phiên tới', 'Không mua bình quân giá xuống'];
   }
 
   // Cá nhân hóa theo vị thế thật trong Danh mục
@@ -72,18 +70,7 @@ export function playbook(code, c) {
   if (h) {
     position = `Bạn đang có ${h.qty.toLocaleString('vi-VN')} cp, giá vốn ${n(h.avgCost)}, ${h.pnlPct != null ? `${h.pnlPct >= 0 ? 'lãi' : 'lỗ'} ${pct(Math.abs(h.pnlPct), 1).replace('+', '')}` : ''}`
       + `${h.pending ? ` · bán được ngay ${h.sellable.toLocaleString('vi-VN')} cp, ${h.pending.toLocaleString('vi-VN')} cp đang chờ về (T+2)` : ''}`;
-    if (c.stop && c.close < c.stop) holder.unshift(`Giá đã thủng cắt lỗ ${n(c.stop)}: nên bán theo kỷ luật`);
-    else if (c.target && c.close >= c.target) holder.unshift(`Đã chạm mục tiêu ${n(c.target)}: chốt lời 1/3–1/2`);
-    else if (h.pnlPct != null && h.pnlPct >= 0.1 && c.stop) holder.push(`Đang lãi ${pct(h.pnlPct, 0).replace('+', '')}: nâng cắt lỗ lên tối thiểu ${n(Math.max(c.stop, h.avgCost))} để bảo toàn lãi`);
-    else if (h.pnlPct != null && h.pnlPct <= -0.07 && code !== 'BUY') holder.unshift(`Đang lỗ ${pct(Math.abs(h.pnlPct), 0).replace('+', '')} và mã không còn mạnh: cân nhắc cắt lỗ, không gồng thêm`);
-    // Mục tiêu thấp hơn giá vốn thì bán ở đó là cắt lỗ, không phải chốt lời
-    if (c.target && c.target < h.avgCost) {
-      for (let k = 0; k < holder.length; k++) {
-        holder[k] = holder[k]
-          .replace(/Chốt lời 1\/3 ở ([\d.,]+); /, 'Giảm 1/3 khi giá hồi về $1 (vẫn dưới giá vốn); ')
-          .replace(/Chốt lời một phần ở ([\d.,]+)/, `Giảm tỷ trọng khi giá hồi về $1 (vẫn dưới giá vốn ${n(h.avgCost)})`);
-      }
-    }
+    if (c.holdStop && c.close < c.holdStop) holder.unshift(`Giá đã dưới ngưỡng cảnh báo ${n(c.holdStop)} (−${Math.round(HOLD_RULE.wideStop * 100)}% giá vốn): xem lại lý do nắm giữ`);
     if (h.pending && h.sellable === 0) holder.push('Cổ phiếu chưa về tài khoản: chưa bán được trước T+2');
   }
   return { newBuyer, holder, position };
@@ -152,15 +139,19 @@ export function buildBrief(a, sector = null, holding = null, bars = null, risk =
   const L = bars?.length >= 60
     ? priceLevels(bars, { atr: i.atr14, ma20: i.sma20, ma50: i.sma50, ma200: i.sma200, minStopAtr: getTuning().minStopAtr })
     : p ? { r2: p.target, r1: p.resistance, close, s1: p.support, s2: null, stop: p.stopLoss, atr: i.atr14 || close * 0.02 } : null;
-  const size = L ? positionSize(close, L.stop, { bars, value20: a.value20, ...(risk || {}) }) : null;
-  const holdStop = holding?.avgCost && bars?.length >= 60 ? holderStop(bars, holding, { minStopAtr: getTuning().minStopAtr }) : null;
+  // Quy tắc đang dùng: không cắt lỗ sát; ngưỡng cảnh báo xa = −15% giá mua (người mới) / giá vốn (người đang giữ).
+  // Cắt lỗ theo hỗ trợ cũ giữ ở supportStop để tham khảo.
+  const wide = (p) => Math.round(Math.floor((p * (1 - HOLD_RULE.wideStop)) / tick(p) + 1e-9) * tick(p) * 100) / 100;
+  if (L) { L.supportStop = L.stop; L.stop = wide(close); }
+  const size = L ? slotSize({ value20: a.value20, capital: risk?.capital ?? null, sector: risk?.sector ?? null }) : null;
+  const holdStop = holding?.avgCost ? wide(holding.avgCost) : null;
+  const heldSessions = holding?.openedAt && bars?.length ? Math.max(0, bars.filter((b) => b.time > holding.openedAt).length) : null;
   const steps = L ? tradeSteps(a.recommendation.code, L, {
-    weight: size?.weight ?? 0.1, rsi: i.rsi14, avgVol20: i.avgVolume20, ma200: i.sma200,
-    score: r?.score, aboveMa200: r?.aboveMa200, holding, holdStop,
+    weight: size?.weight ?? 0.1, ma200: i.sma200, score: r?.score, aboveMa200: r?.aboveMa200, avoid: Boolean(r?.avoid),
+    holding, holdStop, heldSessions,
   }) : null;
-  const firstBuy = steps?.fresh.find((x) => x.side === 'buy' && x.zone);
   const levels = L ? {
-    ...L, buyFrom: firstBuy?.zone[0] ?? L.s1, buyTo: firstBuy?.zone[1] ?? close,
+    ...L, buyFrom: close, buyTo: close, // một lệnh LO ở giá đóng cửa gần nhất
     // Kháng cự 1 sát giá (dưới 1 ATR) thì lấy kháng cự 2 làm mục tiêu tính lời/lỗ
     ...(() => {
       const tgt = L.r1 - close >= L.atr ? L.r1 : L.r2;
@@ -171,18 +162,18 @@ export function buildBrief(a, sector = null, holding = null, bars = null, risk =
       };
     })(),
     weight: size?.weight ?? null,
-    holdStop,
-    sizing: size ? { effectiveLoss: size.effectiveLoss, tail: size.tail, binding: size.binding, limits: size.limits, capitalKnown: risk?.capital > 0 } : null,
+    holdStop, heldSessions, holdSessions: HOLD_RULE.sessions,
+    sizing: size ? { binding: size.binding, limits: size.limits, capitalKnown: risk?.capital > 0 } : null,
   } : null;
   const fmtLv = {
     size: size ? `${Math.round(size.weight * 100)}%` : '10%', half: size ? `${Math.max(1, Math.round(size.weight * 50))}%` : '5%',
-    stop: L ? num(L.stop, 2) : 'mức hỗ trợ gần nhất',
+    stop: L ? num(L.stop, 2) : '–', close: num(close, 2), avoid: Boolean(r?.avoid),
     blocked: size?.weight === 0 ? size.limits.find((x) => x.key === size.binding)?.text : null,
   };
   const action = (ACTIONS[a.recommendation.code] || ACTIONS.HOLD)(fmtLv);
   const plays = levels ? playbook(a.recommendation.code, {
-    close, stop: L.stop, buyFrom: levels.buyFrom, buyTo: levels.buyTo, target: L.r1, resistance: L.r1, weight: size?.weight ?? null,
-    rsi: i.rsi14, aboveMa200: r?.aboveMa200, ma200: i.sma200, score: r?.score, holding,
+    close, stop: L.stop, holdStop, heldSessions, weight: size?.weight ?? null,
+    aboveMa200: r?.aboveMa200, ma200: i.sma200, score: r?.score, avoid: Boolean(r?.avoid), holding,
   }) : null;
 
   // Rủi ro: ngắn gọn, bỏ cảnh báo đã nêu ở trên
@@ -210,7 +201,7 @@ export function buildBrief(a, sector = null, holding = null, bars = null, risk =
 export function actionFor(code, levels) {
   const bind = levels?.weight === 0 ? levels.sizing?.limits?.find((x) => x.key === levels.sizing.binding) : null;
   const fmtLv = {
-    blocked: bind?.text ?? null,
+    blocked: bind?.text ?? null, close: levels ? num(levels.close, 2) : '–',
     size: levels?.weight != null ? `${Math.round(levels.weight * 100)}%` : '10%',
     half: levels?.weight != null ? `${Math.max(1, Math.round(levels.weight * 50))}%` : '5%',
     stop: levels ? num(levels.stop, 2) : 'mức hỗ trợ gần nhất',

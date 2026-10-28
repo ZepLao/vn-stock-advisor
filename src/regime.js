@@ -1,6 +1,9 @@
 // Đánh giá chế độ thị trường (Market Regime): Đếm ngày phân phối (Distribution Days) theo O'Neil,
 // độ rộng thị trường (Market Breadth) và khuyến nghị phân bổ tỷ trọng danh mục (Exposure Control).
 // Nguyên tắc fail-closed: không đủ dữ liệu hoặc lỗi mạng thì trả UNKNOWN (không cho mua mới), không giả định thị trường tốt.
+// Các trạng thái còn lại CHỈ ĐỂ THÔNG TIN, không chặn mua: backtest quy trình 3 năm (livebacktest.js) cho thấy chặn mua theo
+// ngày phân phối làm lãi từ +26,8% còn +9,7% (chặn 55% số phiên), và Laban (overlay_research.py: Faber MA200, động lượng
+// tuyệt đối, độ rộng, vol-target) cũng kết luận luôn đầu tư theo quy tắc là tốt hơn trên HOSE.
 
 import { getPriceHistory } from './data.js';
 import { sma } from './indicators.js';
@@ -10,8 +13,8 @@ export const REGIMES = {
     code: 'CONFIRMED_UPTREND',
     label: 'XU HƯỚNG TĂNG XÁC NHẬN',
     color: '#10b981',
-    exposure: '80–100%',
-    maxHoldings: 8,
+    exposure: 'theo quy tắc',
+    maxHoldings: 10,
     allowNewBuys: true,
     cashPct: 10,
     desc: 'Thị trường vận động lành mạnh trên MA50, số ngày phân phối thấp. Tận dụng cơ hội giải ngân vào các cổ phiếu dẫn dắt.',
@@ -20,21 +23,21 @@ export const REGIMES = {
     code: 'UPTREND_UNDER_PRESSURE',
     label: 'XU HƯỚNG TĂNG BỊ ÁP LỰC',
     color: '#f59e0b',
-    exposure: '50–60%',
-    maxHoldings: 5,
+    exposure: 'theo quy tắc',
+    maxHoldings: 10,
     allowNewBuys: true,
-    cashPct: 40,
-    desc: 'Xuất hiện 3–4 ngày phân phối hoặc tiệm cận MA50. Hạn chế mua đuổi, nâng chặn lãi và chỉ mở vị thế thăm dò với mã chuẩn setup.',
+    cashPct: 0,
+    desc: 'Xuất hiện 3–4 ngày phân phối hoặc tiệm cận MA50. Chỉ để tham khảo: dữ liệu 4 năm không cho thấy giảm tỷ trọng theo tín hiệu này giúp tăng lãi.',
   },
   MARKET_CORRECTION: {
     code: 'MARKET_CORRECTION',
     label: 'THỊ TRƯỜNG ĐIỀU CHỈNH / RỦI RO',
     color: '#ef4444',
-    exposure: '0–30%',
-    maxHoldings: 2,
-    allowNewBuys: false,
-    cashPct: 70,
-    desc: 'Số ngày phân phối lớn (≥ 5 phiên) hoặc gãy MA50. Dòng tiền lớn đang rút ra, ưu tiên tối đa bảo toàn vốn và giữ tiền mặt.',
+    exposure: 'theo quy tắc',
+    maxHoldings: 10,
+    allowNewBuys: true,
+    cashPct: 0,
+    desc: 'Số ngày phân phối lớn (≥ 5 phiên) hoặc gãy MA50. Chỉ để tham khảo: đứng ngoài theo tín hiệu này làm giảm lãi trong backtest 3–4 năm (thị trường hồi nhanh hơn tín hiệu), nên vẫn theo quy tắc mua/giữ.',
   },
   UNKNOWN: {
     code: 'UNKNOWN',

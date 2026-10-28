@@ -22,7 +22,8 @@ import { getTuning, setParam, tuningLog } from './tuning.js';
 const DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const TRADES = join(DIR, 'trades.json');
 const REVIEWS = join(DIR, 'reviews.json');
-export const RULES = { minSample: 30, minDates: 20, t: 2, window: 60, cooldown: 20, hold: 20, stopFloor: 0.15 };
+// hold = thời hạn giữ của quy tắc đang dùng (tradeplan.js HOLD_RULE.sessions)
+export const RULES = { minSample: 30, minDates: 20, t: 2, window: 60, cooldown: 20, hold: 40, stopFloor: 0.15 };
 
 const readJson = (f, d) => readFile(f, 'utf8').then(JSON.parse).catch(() => d);
 async function writeJson(f, v) {

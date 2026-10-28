@@ -2595,7 +2595,7 @@ function briefText(a) {
 
 // Vốn dùng để quy đổi tỷ trọng ra số cổ phiếu (lưu trên trình duyệt này)
 const capitalM = () => { try { return Number(localStorage.getItem('vnstock_capital')) || 0; } catch { return 0; } };
-const SIDE = { buy: ['Mua', 'up'], sell: ['Bán', 'down'], stop: ['Cắt lỗ', 'down'], wait: ['Chờ', 'ref'] };
+const SIDE = { buy: ['Mua', 'up'], sell: ['Bán', 'down'], stop: ['Cảnh báo', 'down'], wait: ['Chờ', 'ref'] };
 
 /** Số tiền dễ đọc: 1,25 tỷ · 125,4 triệu · 850 nghìn. */
 function money(vnd) {
@@ -2717,7 +2717,7 @@ function capitalBox(a, steps) {
 function ladder(l) {
   const rows = [
     ['Kháng cự 2 / mục tiêu 2', l.r2, 'up'], ['Kháng cự 1 / mục tiêu 1', l.r1, 'up'], ['Giá hiện tại', l.close, 'now'],
-    ['Hỗ trợ 1', l.s1, ''], ['Hỗ trợ 2', l.s2, ''], ['Cắt lỗ', l.stop, 'down'],
+    ['Hỗ trợ 1', l.s1, ''], ['Hỗ trợ 2', l.s2, ''], ['Ngưỡng cảnh báo −15%', l.stop, 'down'],
   ].filter((r) => r[1] != null);
   return `<div class="ld">${rows.map(([k, v, cls]) => `<div class="ld-row ${cls}"><span>${k}</span><b>${fmt(v)}</b><span class="muted small">${cls === 'now' ? '' : pct((v - l.close) / l.close)}</span></div>`).join('')}
     ${l.weight != null ? `<div class="ld-note">Tỷ trọng tối đa <b>${Math.round(l.weight * 100)}% vốn</b> (chạm cắt lỗ chỉ mất ~1% tổng vốn)${l.riskReward ? ` · lời/lỗ đến ${l.targetLabel || "mục tiêu"}: <b>${fmt(l.riskReward, 1)} lần</b>` : ''}</div>` : ''}</div>`;
@@ -2843,11 +2843,11 @@ function renderBrief(a) {
   const inZone = entry && close >= entry.from && close <= entry.to;
   const rr = l?.riskReward ?? (stop && target && close > stop ? (target - close) / (close - stop) : null);
   const reward = target ? target / close - 1 : null;
-  const nearTarget = reward != null && reward < 0.04; // như rewardCheck của bản tin: lời kỳ vọng < 4% không đáng mua mới
+
   const wait = st?.fresh?.find((x) => x.side === 'wait')?.condition;
   const weightStr = !buying ? 'Không mua mới' : l?.weight === 0 ? '0% vốn' : l?.weight != null ? `${Math.round(l.weight * (code === 'ACCUMULATE' ? 50 : 100))}% vốn` : '–';
   const weightSub = !buying ? 'Chỉ áp dụng khi có tín hiệu mua'
-    : l?.sizing ? `Rủi ro 1% vốn, lỗ dự kiến ${fmtPct(l.sizing.effectiveLoss)} khi chạm cắt lỗ${l.sizing.capitalKnown ? '' : ' · chưa đặt ACCOUNT_CAPITAL'}` : 'Tối đa / mã';
+    : `1 suất · tối đa 10 mã, 3 mã/ngành${l?.sizing && !l.sizing.capitalKnown ? ' · đặt ACCOUNT_CAPITAL để chặn theo thanh khoản' : ''}`;
 
   el.innerHTML = `
     <div class="bf-top">
@@ -2862,8 +2862,8 @@ function renderBrief(a) {
     <!-- 4 Khối thông số then chốt trực quan -->
     <div class="bf-key-metrics">
       ${buying ? `<div class="bf-metric-card">
-        <span class="m-label">🎯 Vùng mua khuyến nghị</span>
-        <span class="m-val">${entry ? `${fmt(entry.from)} – ${fmt(entry.to)}` : '–'}</span>
+        <span class="m-label">🎯 ${entry && entry.from === entry.to ? 'Lệnh mua (LO)' : 'Vùng mua khuyến nghị'}</span>
+        <span class="m-val">${entry ? (entry.from === entry.to ? `LO ${fmt(entry.to)}` : `${fmt(entry.from)} – ${fmt(entry.to)}`) : '–'}</span>
         <span class="m-sub ${inZone ? 'up' : ''}">${inZone ? '● Đang trong vùng mua' : entry && close > entry.to ? `Chờ chỉnh (${signed(((entry.to - close) / close) * 100, 1)}%)` : 'Chờ tích lũy'}</span>
       </div>` : `<div class="bf-metric-card">
         <span class="m-label">⏸ Chưa mua mới</span>
@@ -2871,14 +2871,14 @@ function renderBrief(a) {
         <span class="m-sub">${esc(wait || 'Chờ tín hiệu mua rõ hơn')}</span>
       </div>`}
       <div class="bf-metric-card down">
-        <span class="m-label">🛡️ ${l?.holdStop != null ? 'Cắt lỗ (từ ngày mua)' : 'Cắt lỗ'}</span>
+        <span class="m-label">⚠️ Ngưỡng cảnh báo (−15%)</span>
         <span class="m-val">${fmt(stop)}</span>
-        <span class="m-sub">${stop ? `${pct((stop - close) / close)} · bán nếu đóng cửa dưới` : 'Ngưỡng vi phạm'}${chandelier ? ` · Chandelier ${fmt(chandelier)}` : ''}</span>
+        <span class="m-sub">${l?.holdStop != null ? 'từ giá vốn' : 'từ giá mua'} · không cắt lỗ sát; dưới mức này thì xem lại${l?.heldSessions != null ? ` · đã giữ ${l.heldSessions}/${l.holdSessions} phiên` : ` · giữ ~${l?.holdSessions ?? 40} phiên`}</span>
       </div>
-      <div class="bf-metric-card ${nearTarget ? '' : 'up'}">
-        <span class="m-label">🚀 Mục tiêu chốt lời</span>
+      <div class="bf-metric-card">
+        <span class="m-label">🧱 Kháng cự gần</span>
         <span class="m-val">${fmt(target)}</span>
-        <span class="m-sub">${target ? `${pct(reward)}${rr ? ` · R/R ${fmt(rr, 1)}x` : ''}` : 'Kỳ vọng'}${nearTarget ? ' · <b class="down">mục tiêu gần (&lt; 4%), không đáng mua mới</b>' : ''}</span>
+        <span class="m-sub">${target ? `${pct(reward)} · tham khảo, quy tắc không chốt lời theo mục tiêu` : '–'}</span>
       </div>
       <div class="bf-metric-card accent">
         <span class="m-label">💼 Tỷ trọng đề xuất</span>

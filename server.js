@@ -14,6 +14,7 @@ import { startCommittee, getCommittee } from './src/committee.js';
 import { getPortfolio, addTransaction, removeTransaction } from './src/portfolio.js';
 import { getRankBoard, runRankPortfolio } from './src/ranking.js';
 import { runLiveBacktest } from './src/livebacktest.js';
+import { runRollingPortfolio } from './src/rolling.js';
 import { evaluatePredictions } from './src/predictions.js';
 import { getVerification } from './src/verify.js';
 import { startHistorySchedule, listSnapshots } from './src/history.js';
@@ -154,6 +155,11 @@ const routes = [
   ['GET', /^\/api\/live-backtest$/, async (req, res) => {
     const q = Object.fromEntries(new URL(req.url, 'http://localhost').searchParams);
     send(res, 200, await runLiveBacktest({ years: q.years, initialCash: q.cash, regimeFilter: q.regime }));
+  }],
+  // Backtest quy tắc đang dùng: danh mục cuốn chiếu (10 mã, ≤ 3/ngành, bổ sung mỗi 5 phiên, giữ 40 phiên, không cắt lỗ)
+  ['GET', /^\/api\/rolling-backtest$/, async (req, res) => {
+    const q = Object.fromEntries(new URL(req.url, 'http://localhost').searchParams);
+    send(res, 200, await runRollingPortfolio({ years: q.years, initialCash: q.cash, ...(q.sizing ? { sizing: q.sizing } : {}), ...(q.stop ? { stopPct: Number(q.stop) } : {}) }));
   }],
   ['GET', /^\/api\/predictions$/, async (req, res) => send(res, 200, await evaluatePredictions())],
   // Kiểm chứng các giả thuyết chọn trước (IC, nhóm mua, độ phủ dải, AI so với luật) kèm t Newey-West

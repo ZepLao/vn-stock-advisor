@@ -188,91 +188,74 @@ export function splitShares(qty, portions) {
 const fmt = (v) => (v == null ? '–' : v.toLocaleString('vi-VN', { maximumFractionDigits: 2 }));
 
 /**
+ * Quy tắc mua / giữ đã kiểm chứng (danh mục cuốn chiếu rolling.js, theo cách vận hành của Laban; backtest rổ theo thời
+ * điểm 3–4 năm ngang danh mục mẫu và hơn hẳn quy trình cũ chia lệnh + cắt lỗ sát + chặn theo regime):
+ *  - mua MỘT lần bằng lệnh LO ở giá đóng cửa gần nhất cho phiên tới (Laban: khớp ~89% số phiên, không tốn hơn ATO);
+ *    không khớp thì xét lại phiên sau, không đuổi giá; một suất mỗi mã (mua thăm dò: nửa suất);
+ *  - KHÔNG cắt lỗ sát (cắt 5–8% làm giảm lãi trên HOSE): ngưỡng cảnh báo xa HOLD_RULE.wideStop dưới giá vốn;
+ *  - giữ HOLD_RULE.sessions phiên rồi xem lại: còn trong nhóm mua thì giữ tiếp, không thì bán; ⛔ thì cân nhắc bán sớm.
+ */
+export const HOLD_RULE = { sessions: 40, wideStop: 0.15 };
+
+/**
  * Các bước mua – bán.
  * @param {string} code BUY | ACCUMULATE | HOLD | AVOID | SELL
- * @param {object} L kết quả priceLevels
- * @param {{ weight?: number, rsi?: number, avgVol20?: number, ma200?: number, score?: number, aboveMa200?: boolean,
+ * @param {object} L kết quả priceLevels (L.stop = ngưỡng cảnh báo xa cho người mua mới)
+ * @param {{ weight?: number, score?: number, aboveMa200?: boolean, ma200?: number, marketWait?: string, avoid?: boolean,
+ *   holdStop?: number, heldSessions?: number,
  *   holding?: { qty: number, avgCost: number, pnlPct?: number, sellable?: number, pending?: number } }} ctx
- * Mỗi bước: { step, side: 'buy'|'sell'|'stop'|'wait', zone: [from, to] | null, price, portion, condition, shares? }
+ * Mỗi bước: { side: 'buy'|'sell'|'stop'|'wait', zone?: [from, to], price?, portion?, portionOfHolding?, condition, shares? }
  */
 export function tradeSteps(code, L, ctx = {}) {
   const W = ctx.weight ?? 0.1;
-  const hot = (ctx.rsi ?? 0) > 70;
-  const volTrigger = ctx.avgVol20 ? Math.round(ctx.avgVol20 * 1.5 / 1000) * 1000 : null;
-  const breakout = `đóng cửa trên ${fmt(L.r1)}${volTrigger ? ` với khối lượng > ${volTrigger.toLocaleString('vi-VN')} cp (1,5× TB20)` : ' kèm khối lượng lớn'}`;
-  // RSI nóng: chờ giá lùi về hỗ trợ — cận trên luôn thấp hơn giá hiện tại ít nhất 0,3 ATR
-  const hotTop = down(Math.min(L.s1 + 0.3 * L.atr, L.close - 0.3 * L.atr));
-  const zone1 = hot
-    ? [Math.min(L.s1, hotTop), hotTop]
-    : [down(Math.max(L.s1, L.close - 0.5 * L.atr)), L.close];
-  const zone2 = L.s2 != null ? [L.s2, up(Math.min(L.s1, L.s2 + 0.3 * L.atr))] : null;
+  const N = HOLD_RULE.sessions;
 
   // ----- Chưa có cổ phiếu -----
   const fresh = [];
   if (code === 'BUY' || code === 'ACCUMULATE') {
-    const total = code === 'BUY' ? W : W / 2;
-    const parts = code === 'BUY' ? (zone2 ? [0.4, 0.3, 0.3] : [0.5, 0.5]) : (zone2 ? [0.5, 0.5] : [1]);
-    let k = 0;
-    fresh.push({ side: 'buy', zone: zone1, portion: total * parts[k++],
-      condition: hot ? `RSI ${Math.round(ctx.rsi)} đang nóng: không mua đuổi, đặt lệnh chờ giá lùi về vùng hỗ trợ` : 'Mua quanh giá hiện tại / hỗ trợ gần' });
-    if (zone2) fresh.push({ side: 'buy', zone: zone2, portion: total * parts[k++], condition: `Khi giá điều chỉnh về hỗ trợ 2 mà chưa thủng ${fmt(L.stop)}` });
-    if (code === 'BUY') fresh.push({ side: 'buy', price: up(L.r1 + tick(L.r1)), portion: total * parts[k++], condition: `Khi ${breakout} (xác nhận bứt phá)` });
-    fresh.push({ side: 'stop', price: L.stop, condition: `Bán toàn bộ nếu đóng cửa dưới ${fmt(L.stop)}` });
+    const half = code === 'ACCUMULATE';
+    fresh.push({ side: 'buy', price: L.close, portion: half ? W / 2 : W,
+      condition: `Lệnh LO giá ${fmt(L.close)} (đóng cửa gần nhất) cho phiên tới${half ? ', nửa suất (mua thăm dò)' : ''}; không khớp thì xét lại phiên sau, không đuổi giá` });
+    fresh.push({ side: 'stop', price: L.stop, condition: `Cảnh báo nếu đóng cửa dưới ${fmt(L.stop)} (−${Math.round(HOLD_RULE.wideStop * 100)}% giá mua): xem lại lý do nắm giữ` });
+    fresh.push({ side: 'wait', condition: `Giữ khoảng ${N} phiên rồi xem lại: còn trong nhóm mua thì giữ tiếp, không thì bán` });
   } else {
     const miss = [];
-    if (ctx.score != null && ctx.score < 70) miss.push(`điểm xếp hạng ≥ 70 (hiện ${ctx.score})`);
-    if (ctx.aboveMa200 === false && ctx.ma200) miss.push(`giá đóng cửa trên MA200 ${fmt(up(ctx.ma200))}`);
+    if (ctx.avoid) miss.push('ra khỏi nhóm ⛔ (10% thấp nhất)');
+    else {
+      if (ctx.score != null && ctx.score < 70) miss.push(`điểm xếp hạng ≥ 70 (hiện ${ctx.score}) hoặc vào nhóm xu hướng chuẩn`);
+      if (ctx.aboveMa200 === false && ctx.ma200) miss.push(`giá đóng cửa trên MA200 ${fmt(up(ctx.ma200))}`);
+    }
     // Điều kiện còn thiếu: từ tín hiệu định lượng, hoặc từ yếu tố thị trường AI đánh giá xấu
     if (ctx.marketWait) miss.push(ctx.marketWait);
     fresh.push({ side: 'wait', condition: code === 'SELL' ? 'Không mua mã này' : `Chưa mua. Chỉ xem xét khi đạt: ${miss.join(' và ') || 'tín hiệu rõ hơn'}` });
-    if (code !== 'SELL') fresh.push({ side: 'buy', zone: zone2 ?? zone1, portion: W / 3, condition: 'Nếu điều kiện trên đạt: mua lần đầu 1/3 tỷ trọng ở vùng hỗ trợ này' });
   }
 
   // ----- Đang nắm giữ -----
   const hold = [];
   const h = ctx.holding;
-  // Người đang giữ: cắt lỗ neo từ ngày mua, chỉ nâng (holderStop); không có thì dùng cắt lỗ của bậc thang hôm nay
   const hs = ctx.holdStop ?? L.stop;
-  const take = (price) => (h && price < h.avgCost ? 'Giảm' : 'Chốt lời');
-  if (code === 'BUY') {
-    if (zone2) hold.push({ side: 'buy', zone: zone2, portion: W * 0.3, condition: 'Mua thêm khi chỉnh về hỗ trợ 2 (tổng tỷ trọng không vượt mức tối đa)' });
-    hold.push({ side: 'buy', price: up(L.r1 + tick(L.r1)), portion: W * 0.3, condition: `Mua thêm khi ${breakout}` });
-    hold.push({ side: 'sell', price: L.r2, portionOfHolding: 1 / 3, condition: `${take(L.r2)} 1/3 ở kháng cự 2` });
-    hold.push({ side: 'sell', price: null, portionOfHolding: 2 / 3, condition: `Phần còn lại: khi giá vượt ${fmt(L.r1)}, dời cắt lỗ lên ${fmt(down(L.r1 - L.atr))}; giữ đến khi thủng` });
-  } else if (code === 'ACCUMULATE' || code === 'HOLD') {
-    hold.push({ side: 'wait', condition: 'Không mua thêm' });
-    hold.push({ side: 'sell', price: L.r1, portionOfHolding: 1 / 3, condition: `${take(L.r1)} 1/3 khi giá lên kháng cự 1` });
-    hold.push({ side: 'sell', price: L.r2, portionOfHolding: 1 / 3, condition: `${take(L.r2)} thêm 1/3 ở kháng cự 2` });
+  const held = ctx.heldSessions;
+  const due = held != null && held >= N;
+  const heldTxt = held != null ? ` (đã giữ ${held}/${N} phiên)` : '';
+  if (code === 'BUY' || code === 'ACCUMULATE') {
+    hold.push({ side: 'wait', condition: `Giữ: vẫn trong nhóm mua${heldTxt}${due ? ', đã đủ hạn nên giữ tiếp thêm một kỳ' : ''}. Không mua thêm quá một suất` });
+  } else if (code === 'HOLD') {
+    hold.push(due
+      ? { side: 'sell', price: null, portionOfHolding: 1, condition: `Đã giữ đủ ${N} phiên và không còn trong nhóm mua: bán ở phiên tới` }
+      : { side: 'wait', condition: `Giữ đến đủ ${N} phiên${heldTxt} rồi xem lại; không mua thêm` });
   } else if (code === 'AVOID') {
-    hold.push({ side: 'wait', condition: 'Không mua thêm, không bình quân giá xuống' });
-    hold.push({ side: 'sell', zone: [down(L.r1 - 0.3 * L.atr), L.r1], portionOfHolding: 1 / 2, condition: `${take(L.r1)} 1/2 khi giá hồi lên gần kháng cự 1` });
-    hold.push({ side: 'sell', price: L.s1, portionOfHolding: 1 / 2, condition: `Bán phần còn lại nếu đóng cửa dưới hỗ trợ 1 ${fmt(L.s1)}` });
+    hold.push(ctx.avoid || due
+      ? { side: 'sell', price: null, portionOfHolding: 1, condition: ctx.avoid ? '⛔ Thuộc 10% thấp nhất: cân nhắc bán ở phiên tới (nhóm này kém rổ ~1,3%/20 phiên)' : `Đã giữ đủ ${N} phiên và không còn trong nhóm mua: bán ở phiên tới` }
+      : { side: 'wait', condition: `Không mua thêm. Giữ đến đủ ${N} phiên${heldTxt} rồi bán nếu vẫn chưa vào nhóm mua` });
   } else {
-    hold.push({ side: 'sell', price: L.close, portionOfHolding: 1 / 2, condition: 'Bán 1/2 ngay phiên tới' });
-    hold.push({ side: 'sell', zone: [down(L.r1 - 0.3 * L.atr), L.r1], portionOfHolding: 1 / 2, condition: `Bán phần còn lại khi hồi lên kháng cự 1, hoặc ngay khi thủng ${fmt(L.s1)}` });
+    hold.push({ side: 'sell', price: null, portionOfHolding: 1, condition: 'Rủi ro rơi tự do: bán ở phiên tới' });
   }
-  if (code !== 'SELL' && code !== 'AVOID') hold.push({ side: 'stop', price: hs, portionOfHolding: 1, condition: `Bán toàn bộ nếu đóng cửa dưới ${fmt(hs)}` });
+  if (code !== 'SELL') hold.push({ side: 'stop', price: hs, portionOfHolding: 1, condition: `Cảnh báo nếu đóng cửa dưới ${fmt(hs)} (−${Math.round(HOLD_RULE.wideStop * 100)}% giá vốn): xem lại lý do nắm giữ` });
 
-  // Cá nhân hóa theo vị thế thật: số cổ phiếu mỗi bước bán, cảnh báo kỷ luật
+  // Cá nhân hóa theo vị thế thật: số cổ phiếu, cảnh báo đã thủng ngưỡng, cổ phiếu chưa về
   if (h?.qty) {
-    // Mỗi bước bán đúng tỷ lệ của nó (lô 100 nếu ≥ 300 cp); bước "phần còn lại" (không có giá) nhận số dư
-    const lot = h.qty >= 300 ? 100 : 1;
-    const sells = hold.filter((s) => s.side === 'sell' && s.portionOfHolding);
-    let used = 0;
-    for (const s of sells.filter((x) => x.price != null || x.zone)) {
-      s.shares = Math.min(h.qty - used, Math.max(lot, Math.floor((h.qty * s.portionOfHolding) / lot) * lot));
-      used += s.shares;
-    }
-    const rest = sells.find((x) => x.price == null && !x.zone);
-    if (rest) rest.shares = h.qty - used;
-    else if (used < h.qty && !['AVOID', 'SELL'].includes(code)) {
-      const at = hold.findIndex((s) => s.side === 'stop');
-      hold.splice(at < 0 ? hold.length : at, 0, { side: 'wait', shares: h.qty - used, condition: `Giữ ${(h.qty - used).toLocaleString('vi-VN')} cp còn lại với mức cắt lỗ bên dưới` });
-    } else if (used < h.qty) sells.at(-1).shares += h.qty - used;
-    const stopStep = hold.find((s) => s.side === 'stop');
-    if (stopStep) stopStep.shares = h.qty;
-    if (L.close < hs) hold.unshift({ side: 'stop', price: L.close, shares: h.qty, condition: `Giá đã thủng cắt lỗ ${fmt(hs)}: bán theo kỷ luật` });
-    else if (h.pnlPct != null && h.pnlPct >= 0.1) hold.push({ side: 'stop', price: down(Math.max(hs, h.avgCost)), shares: h.qty, condition: `Đang lãi ${Math.round(h.pnlPct * 100)}%: nâng cắt lỗ lên tối thiểu ${fmt(down(Math.max(hs, h.avgCost)))} để bảo toàn lãi` });
+    for (const s of hold) if (s.portionOfHolding) s.shares = h.qty;
+    if (L.close < hs) hold.unshift({ side: 'stop', price: L.close, shares: h.qty, condition: `Giá đã dưới ngưỡng cảnh báo ${fmt(hs)}: xem lại lý do nắm giữ, không bình quân giá xuống` });
     if (h.pending) hold.push({ side: 'wait', condition: `${h.pending.toLocaleString('vi-VN')} cp chưa về (T+2): hôm nay chỉ bán được tối đa ${(h.sellable ?? 0).toLocaleString('vi-VN')} cp` });
   }
   return { fresh, hold };

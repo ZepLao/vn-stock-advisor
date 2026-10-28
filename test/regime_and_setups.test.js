@@ -43,7 +43,8 @@ test('calculateMarketBreadth & evaluateMarketRegime: phân loại đúng trạng
   const breadthBad = { total: 20, pctAboveMa20: 20, pctAboveMa50: 15 };
   const regimeBad = evaluateMarketRegime(badBars, breadthBad);
   assert.equal(regimeBad.regime, REGIMES.MARKET_CORRECTION.code);
-  assert.equal(regimeBad.allowNewBuys, false);
+  // Điều chỉnh chỉ để thông tin (backtest: chặn mua làm giảm lãi); chặn mua chỉ khi thiếu dữ liệu (UNKNOWN)
+  assert.equal(regimeBad.allowNewBuys, true);
 });
 
 test('chandelierExit & buildDynamicTrailingPlan: tính đúng chặn lãi động và dời điểm hòa vốn', () => {

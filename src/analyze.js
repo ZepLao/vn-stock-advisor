@@ -49,8 +49,13 @@ const REC = Object.fromEntries(RECOMMENDATIONS.map((r) => [r.code, r]));
 export function rankRecommendation(r, { flagged = false, losing = false, liquid = true, stockRisk = null, mc = null, marketRegime = null } = {}) {
   const above = r.aboveMa200 !== false;
   let rec;
-  if (r.score >= 70 && above) {
-    let desc = `Điểm xếp hạng ${r.score} (hạng ${r.position}/${r.universe}) và giá trên MA200: thuộc nhóm dẫn đầu về động lượng và xu hướng. Hiệu quả lịch sử của nhóm này xem ở Backtest danh mục (rổ theo thời điểm); quá khứ không đảm bảo tương lai.`;
+  if (r.avoid) {
+    rec = { ...REC.AVOID, desc: `⛔ Thuộc 10% thấp nhất của rổ theo 6 yếu tố (động lượng, gần đỉnh, biến động, ADX, biến động 60 phiên, phiên tăng đột biến). Trong 4 năm nhóm này kém rổ khoảng 1,3% mỗi 20 phiên (≈ −16%/năm, có ý nghĩa thống kê): không mua, đang giữ thì cân nhắc bán.` };
+  } else if ((r.score >= 70 && above) || r.trendPick) {
+    // Ứng viên mua của danh mục cuốn chiếu (rolling.js, theo Laban): xếp hạng ≥ 70 trên MA200, hoặc xu hướng chuẩn
+    let desc = r.score >= 70 && above
+      ? `Điểm xếp hạng ${r.score} (hạng ${r.position}/${r.universe}) và giá trên MA200: thuộc nhóm dẫn đầu về động lượng và xu hướng. Hiệu quả lịch sử của nhóm này xem ở Backtest danh mục (rổ theo thời điểm); quá khứ không đảm bảo tương lai.`
+      : `Xu hướng chuẩn: cách đỉnh 52 tuần không quá 5% và biến động 60 phiên trong nhóm 70% êm nhất rổ (điểm xếp hạng ${r.score}).`;
     if (mc) {
       desc += ` Rủi ro 20 phiên (mô phỏng, không tính xu hướng): xác suất có lúc lỗ ≥ 7% là ${Math.round(mc.probLoss7 * 100)}%, mức sụt trung vị ${mc.troughDdMedian}%.`;
     }
@@ -575,7 +580,7 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
   const value20 = avgTradedValue(bars);
   const marketRegime = isIndex ? null : await getMarketRegime().catch(() => null);
   if (marketRegime && marketRegime.regime === 'MARKET_CORRECTION') {
-    warnings.push(`[Thị trường rủi ro] VN-Index đang điều chỉnh với ${marketRegime.distDays} ngày phân phối. Tỷ trọng cổ phiếu khuyến nghị tối đa: ${marketRegime.exposure}.`);
+    warnings.push(`[Thị trường điều chỉnh] VN-Index có ${marketRegime.distDays} ngày phân phối. Chỉ để tham khảo: backtest cho thấy đứng ngoài theo tín hiệu này làm giảm lãi, quy tắc mua/giữ không đổi.`);
   } else if (marketRegime && marketRegime.regime === 'UNKNOWN') {
     warnings.push(`[Thị trường chưa rõ] ${marketRegime.desc}`);
   }
