@@ -1,6 +1,7 @@
 // Thông số tool tự điều chỉnh sau khi đối chiếu dự đoán với kết quả thực tế (xem selfreview.js).
 // Lưu ở data/tuning.json kèm nhật ký: mỗi thay đổi ghi giá trị cũ/mới, lý do và số liệu làm căn cứ.
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,14 +30,21 @@ export function tuningLog() {
   return store.log;
 }
 
+/** Băm bộ thông số (phần "t…" của phiên bản mô hình trong version.js). */
+export function tuningHash(params = store.params) {
+  return createHash('sha1').update(JSON.stringify(params)).digest('hex').slice(0, 6);
+}
+
 /** Đổi một thông số (đã kẹp trong BOUNDS) và ghi nhật ký. Trả về bản ghi thay đổi, null nếu không đổi. */
 export async function setParam(name, value, reason, evidence = null, date = null) {
   if (!(name in DEFAULTS)) throw new Error(`Thông số không tồn tại: ${name}`);
   if (BOUNDS[name]) value = Math.round(Math.min(BOUNDS[name][1], Math.max(BOUNDS[name][0], value)) * 1000) / 1000;
   const from = store.params[name];
   if (from === value) return null;
+  const tuningBefore = tuningHash();
   store.params[name] = value;
-  const entry = { at: new Date().toISOString(), date, name, from, to: value, reason, evidence };
+  // Mỗi lần đổi là một phiên bản mô hình mới: dự đoán ghi sau thời điểm này mang băm tuningAfter
+  const entry = { at: new Date().toISOString(), date, name, from, to: value, reason, evidence, tuningBefore, tuningAfter: tuningHash() };
   store.log.push(entry);
   if (store.log.length > 500) store.log.splice(0, store.log.length - 500);
   await mkdir(dirname(FILE), { recursive: true });

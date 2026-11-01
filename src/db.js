@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { getPriceHistory } from './data.js';
+import { predictionLog, canonicalItems } from './predictions.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = join(ROOT, 'data');
@@ -98,14 +99,26 @@ async function syncHistory() {
   return n;
 }
 
+// Sổ dự đoán chỉ ghi thêm → prediction_log (không bao giờ cập nhật dòng cũ); bản ghi được chấm của mỗi (nguồn, mã, phiên)
+// (cuối cùng trước 9:00 phiên sau) → predictions cho các view chấm điểm
 async function syncPredictions() {
-  const p = await readJson('predictions.json');
-  if (!p?.items) return 0;
-  const last = (await query('SELECT max(recorded_at) AS t FROM predictions')).rows[0].t;
+  const log = await predictionLog();
+  const last = (await query('SELECT max(recorded_at) AS t FROM prediction_log')).rows[0].t;
   const since = last ? last.getTime() - 60_000 : 0;
-  const items = p.items.filter((x) => !x.at || Date.parse(x.at) > since);
-  return upsert('predictions', ['source', 'symbol', 'date', 'direction', 'label', 'price', 'detail', 'recorded_at'],
-    items.map((x) => [x.source, x.symbol, x.date, x.direction, x.label, x.price, x.detail ?? null, x.at ?? null]), ['source', 'symbol', 'date']);
+  const fresh = log.filter((x) => !x.recordedAt || Date.parse(x.recordedAt) > since);
+  if (!fresh.length) return 0;
+  await upsert('prediction_log', ['id', 'source', 'symbol', 'date', 'direction', 'label', 'price', 'detail', 'score', 'confidence', 'band', 'plan', 'partial', 'version', 'recorded_at', 'expected', 'expected_excess', 'flags'],
+    fresh.map((x) => [x.id, x.source, x.symbol, x.date, x.direction, x.label, x.price, x.detail ?? null, x.score ?? null, x.confidence ?? null,
+      x.band ?? null, x.plan ?? null, x.partial ?? null, x.version ?? null, x.recordedAt ?? null,
+      x.expected ?? null, x.expectedExcess ?? null, x.flags ?? null]), ['id'], { update: false });
+  const idx = (await getPriceHistory('VNINDEX').catch(() => null))?.bars || [];
+  const at = new Map(idx.map((b, k) => [b.time, k]));
+  const touched = new Set(fresh.map((x) => `${x.source}|${x.symbol}|${x.date}`));
+  const { items } = canonicalItems(log, (d) => (at.has(d) ? idx[at.get(d) + 1]?.time ?? null : null));
+  return upsert('predictions', ['source', 'symbol', 'date', 'direction', 'label', 'price', 'detail', 'recorded_at', 'version', 'score', 'confidence'],
+    items.filter((x) => touched.has(`${x.source}|${x.symbol}|${x.date}`))
+      .map((x) => [x.source, x.symbol, x.date, x.direction, x.label, x.price, x.detail ?? null, x.recordedAt ?? null, x.version ?? null, x.score ?? null, x.confidence ?? null]),
+    ['source', 'symbol', 'date']);
 }
 
 async function syncAi() {
@@ -169,7 +182,12 @@ async function syncPortfolio() {
 
 /** Giá ngày của rổ + VNINDEX + mã đã dự đoán: chỉ chạy khi có phiên mới (lần đầu nạp ~1,5 năm). */
 async function syncBars() {
-  const { bars: idx } = await getPriceHistory('VNINDEX');
+  // Trước 15:10 giờ VN nến hôm nay còn đang chạy: không ghi, nếu không phiên đó bị coi là đã nạp
+  // và giá chốt không bao giờ được cập nhật (lỗi 22/10/2026: nến 9h30 nằm lại thay giá đóng cửa)
+  const vn = new Date(Date.now() + 7 * 3600_000);
+  const open = vn.getUTCHours() * 60 + vn.getUTCMinutes() < 15 * 60 + 10 ? vn.toISOString().slice(0, 10) : null;
+  const closed = (bars) => bars.filter((b) => b.time !== open);
+  const idx = closed((await getPriceHistory('VNINDEX')).bars);
   const latest = idx.at(-1)?.time;
   // Bỏ qua nến tạm (volume 0) đã lỡ ghi để phiên đó được nạp lại bằng giá chốt
   const have = (await query('SELECT to_char(max(date), \'YYYY-MM-DD\') AS d FROM daily_bars WHERE symbol = \'VNINDEX\' AND volume > 0')).rows[0].d;
@@ -178,7 +196,7 @@ async function syncBars() {
     SELECT symbol FROM stock_daily WHERE date = (SELECT max(date) FROM stock_daily)
     UNION SELECT DISTINCT symbol FROM predictions UNION SELECT DISTINCT symbol FROM portfolio_transactions`)).rows.map((r) => r.symbol));
   syms.delete('VNINDEX');
-  const toRows = (s, bars) => (have ? bars.filter((b) => b.time > have) : bars).map((b) => [s, b.time, b.open, b.high, b.low, b.close, b.volume]);
+  const toRows = (s, bars) => closed(have ? bars.filter((b) => b.time > have) : bars).map((b) => [s, b.time, b.open, b.high, b.low, b.close, b.volume]);
   let n = 0;
   const list = [...syms];
   for (let k = 0; k < list.length; k += 6) {

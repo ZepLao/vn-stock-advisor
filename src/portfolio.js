@@ -9,19 +9,24 @@ import { getPriceHistory, getCompanyInfo, screenCriteria } from './data.js';
 import { technicalAnalysis } from './analyze.js';
 import { DEFAULTS, maxDrawdown } from './backtest.js';
 import { alignReturns, stdev, historicalVar, historicalCvar, correlation, beta } from './risk.js';
+import { accountCapital, coreConfig, slotsForCapital } from './sizing.js';
+import { holdPlan } from './tradeplan.js';
 
 const FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'portfolio.json');
-const BROKERAGE = Number(process.env.FEE_BROKERAGE) || DEFAULTS.brokerage;
+const BROKERAGE = process.env.FEE_BROKERAGE != null && !Number.isNaN(Number(process.env.FEE_BROKERAGE))
+  ? Number(process.env.FEE_BROKERAGE)
+  : DEFAULTS.brokerage;
 const SELL_TAX = DEFAULTS.sellTax;
 const SETTLEMENT = DEFAULTS.settlementBars;
 
 let state = null;
 let saving = Promise.resolve();
 
-async function load() {
-  if (state) return state;
+async function load(force = false) {
+  if (state && !force) return state;
   try { state = JSON.parse(await readFile(FILE, 'utf8')); } catch { state = {}; }
   state.transactions ??= [];
+  state.cash ??= [];
   return state;
 }
 
@@ -193,9 +198,181 @@ export async function getHolding(symbol, close = null) {
   };
 }
 
+/**
+ * Vị thế đang mở để định cỡ lệnh mới: giá trị và cắt lỗ kỹ thuật (cùng cách tính với bảng danh mục).
+ * @returns {Promise<{ symbol: string, value: number, close: number|null, stop: number|null }[]>}
+ */
+export async function getOpenRisk() {
+  await load();
+  const open = buildPositions(state.transactions).positions.filter((p) => p.qty > 0);
+  const res = await Promise.all(open.map((p) => getPriceHistory(p.symbol).catch(() => null)));
+  return open.map((p, k) => {
+    const b = res[k]?.bars;
+    const close = b?.at(-1)?.close ?? null;
+    const stop = b?.length >= 30 ? technicalAnalysis(b, null, {}).plan?.stopLoss ?? null : null;
+    return { symbol: p.symbol, value: close != null ? p.qty * close * 1000 : p.cost, close, stop };
+  });
+}
+
+/** Các mã đang nắm giữ (số lượng > 0). */
+export async function heldSymbols() {
+  await load();
+  return buildPositions(state.transactions).positions.filter((p) => p.qty > 0).map((p) => p.symbol);
+}
+
+// ---------- Quản lý vốn: sổ tiền mặt ----------
+// Nạp / rút / cổ tức tiền / đặt số dư (theo số dư thật ở công ty chứng khoán). Mua bán tự trừ / cộng tiền (kèm phí, thuế);
+// tiền bán chưa về (chưa đủ T+2) tính riêng là "chờ về", không dùng để mua. Tổng tài sản (NAV) = tiền mặt + giá trị cổ
+// phiếu; mọi đề xuất (số mã, một suất, số cổ phiếu mỗi lệnh) dùng NAV này thay cho ACCOUNT_CAPITAL.
+export const CASH_TYPES = { DEPOSIT: 'Nạp tiền', WITHDRAW: 'Rút tiền', DIVIDEND: 'Cổ tức tiền', PROFIT: 'Lãi vòng trước', SET: 'Đặt số dư' };
+
+/**
+ * Dựng sổ tiền mặt (hàm thuần). Cùng ngày: lệnh mua bán và nạp/rút theo thứ tự ghi, "đặt số dư" tính sau cùng
+ * (số dư cuối ngày ở CTCK) và phần chênh ghi thành điều chỉnh.
+ * @param {object[]} transactions lệnh mua bán; @param {object[]} cash dòng tiền; @param {string[]} sessionDates lịch phiên
+ * @returns {{ known: boolean, balance: number|null, available: number|null, pendingSale: number, deposits: number,
+ *   withdrawals: number, dividends: number, adjust: number, netContributed: number, events: object[] }}
+ */
+export function cashLedger(transactions, cash = [], sessionDates = [], fees = { brokerage: BROKERAGE, sellTax: SELL_TAX }) {
+  const ev = [
+    ...transactions.map((t) => ({ kind: 'trade', date: t.date, seq: t.seq || 0, t })),
+    ...cash.map((c) => ({ kind: 'cash', date: c.date, seq: c.type === 'SET' ? Infinity : c.seq || 0, c })),
+  ].sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq);
+  let bal = 0, deposits = 0, withdrawals = 0, dividends = 0, profits = 0, adjust = 0, pendingSale = 0;
+  const events = [];
+  for (const e of ev) {
+    let delta = 0, label;
+    if (e.kind === 'trade') {
+      const gross = e.t.qty * e.t.price * 1000;
+      delta = e.t.type === 'BUY' ? -gross * (1 + fees.brokerage) : gross * (1 - fees.brokerage - fees.sellTax);
+      label = `${e.t.type === 'BUY' ? 'Mua' : 'Bán'} ${e.t.symbol} ${e.t.qty} × ${e.t.price}`;
+      // Tiền bán chưa đủ T+2 phiên tính đến phiên gần nhất: chưa dùng được
+      if (e.t.type === 'SELL' && sessionDates.filter((d) => d > e.t.date).length < SETTLEMENT) pendingSale += delta;
+    } else if (e.c.type === 'SET') {
+      delta = e.c.amount - bal;
+      adjust += delta;
+      label = 'Đặt số dư';
+    } else {
+      delta = e.c.type === 'WITHDRAW' ? -e.c.amount : e.c.amount;
+      if (e.c.type === 'DEPOSIT') deposits += e.c.amount;
+      else if (e.c.type === 'WITHDRAW') withdrawals += e.c.amount;
+      else if (e.c.type === 'PROFIT') profits += e.c.amount;
+      else dividends += e.c.amount;
+      label = CASH_TYPES[e.c.type] || e.c.type;
+    }
+    bal += delta;
+    events.push({ date: e.date, kind: e.kind, id: e.c?.id ?? e.t?.id, type: e.c?.type ?? e.t?.type, label, note: e.c?.note ?? e.t?.note ?? '', delta: Math.round(delta), balance: Math.round(bal) });
+  }
+  const known = cash.length > 0;
+  return {
+    known, balance: known ? Math.round(bal) : null, available: known ? Math.round(bal - pendingSale) : null, pendingSale: Math.round(pendingSale),
+    deposits, withdrawals, dividends, profits, adjust: Math.round(adjust), netContributed: deposits - withdrawals, events,
+  };
+}
+
+/**
+ * Bức tranh vốn (hàm thuần): dòng tiền tách khỏi lời lỗ cổ phiếu.
+ *   tiền mặt còn lại = vốn đã nạp ròng + lãi đã chốt / lãi vòng trước − đã mua
+ * Lời lỗ cổ phiếu đang giữ tính riêng (summary.unrealized). Tổng tài sản (tiền mặt + giá trị cổ phiếu) chỉ dùng để
+ * tính số suất theo vốn phần chọn mã (sizing.js) và lõi ETF. Chưa có sổ tiền mặt thì dùng ACCOUNT_CAPITAL (nếu có).
+ */
+export function capitalSummary(ledger, holdings, { envCapital = accountCapital(), core = coreConfig(), realized = 0 } = {}) {
+  const stock = holdings.reduce((s, h) => s + (h.marketValue || 0), 0);
+  const coreValue = core.symbol ? holdings.filter((h) => h.symbol === core.symbol).reduce((s, h) => s + (h.marketValue || 0), 0) : 0;
+  const nav = ledger.known ? ledger.balance + stock : envCapital ?? null;
+  const satCapital = nav != null ? nav * (1 - core.pct) : null;
+  const slots = slotsForCapital(satCapital);
+  const picks = holdings.filter((h) => h.symbol !== core.symbol).length;
+  const invested = Math.round(holdings.reduce((s, h) => s + (h.cost || 0), 0));
+  const netContributed = ledger.known ? ledger.netContributed : (envCapital ?? null);
+  const profits = ledger.profits || 0;
+  const dividends = ledger.dividends || 0;
+  const totalProfit = Math.round((realized || 0) + profits + dividends);
+  const remainingCash = netContributed != null ? Math.round(netContributed + totalProfit - invested) : null;
+
+  const out = {
+    source: ledger.known ? 'portfolio' : envCapital ? 'env' : null,
+    nav: nav != null ? Math.round(nav) : null,
+    cash: ledger.balance,
+    remainingCash,
+    available: ledger.available,
+    pendingSale: ledger.pendingSale,
+    stockValue: Math.round(stock), stockPct: nav ? stock / nav : null, cashPct: nav && ledger.known ? ledger.balance / nav : null,
+    deposits: ledger.deposits,
+    withdrawals: ledger.withdrawals,
+    netContributed,
+    invested,
+    profits,
+    realized: Math.round(realized), dividends,
+    // Lãi/lỗ toàn tài khoản = NAV − tiền đã nạp ròng
+    totalPnl: ledger.known && netContributed != null ? Math.round(nav - netContributed) : null,
+    totalPnlPct: ledger.known && netContributed > 0 ? (nav - netContributed) / netContributed : null,
+    slots, slotValue: satCapital != null && slots ? Math.round(satCapital / slots) : null, picks, freeSlots: Math.max(0, slots - picks),
+    core: core.symbol ? { symbol: core.symbol, pct: core.pct, value: Math.round(coreValue), weight: nav ? coreValue / nav : null } : null,
+  };
+  if (remainingCash != null && remainingCash < 0) {
+    out.warning = `Tiền mặt âm: tổng giá trị đã mua (${invested.toLocaleString('vi-VN')} đ) vượt quá vốn khả dụng (${(netContributed + totalProfit).toLocaleString('vi-VN')} đ). Hãy nạp thêm tiền.`;
+  } else if (out.cash != null && out.cash < 0) {
+    out.warning = 'Tiền mặt âm: nhật ký mua nhiều hơn tiền đã nạp. Hãy nạp tiền hoặc "đặt số dư" theo CTCK.';
+  }
+  return out;
+}
+
+// Giá khớp hợp lý: trong biên thấp–cao của phiên ±3% (làm tròn bước giá, khớp ATO/ATC lệch nhẹ)
+const PRICE_SLACK = 0.03;
+
+/** Giá lệnh nằm ngoài biên thấp–cao của phiên đó (nhập nhầm giá / nhầm mã / nhầm ngày); null nếu hợp lý hoặc không có dữ liệu. */
+export function priceOutOfRange(t, bars) {
+  const b = bars?.find((x) => x.time === t.date);
+  if (!b || !(b.low > 0)) return null;
+  if (t.price >= b.low * (1 - PRICE_SLACK) && t.price <= b.high * (1 + PRICE_SLACK)) return null;
+  return { id: t.id, symbol: t.symbol, type: t.type, date: t.date, price: t.price, low: b.low, high: b.high };
+}
+
+/** Thông tin vốn hiện tại (nhẹ, dùng cho đề xuất từng mã và bản tin). */
+export async function getCapitalInfo() {
+  await load();
+  const open = buildPositions(state.transactions).positions.filter((p) => p.qty > 0);
+  const [idx, ...res] = await Promise.all([getPriceHistory('VNINDEX').catch(() => null), ...open.map((p) => getPriceHistory(p.symbol).catch(() => null))]);
+  const holdings = open.map((p, k) => ({ symbol: p.symbol, cost: p.cost, marketValue: (res[k]?.bars?.at(-1)?.close ?? p.cost / p.qty / 1000) * p.qty * 1000 }));
+  const { closed } = buildPositions(state.transactions);
+  return capitalSummary(cashLedger(state.transactions, state.cash, idx?.bars.map((b) => b.time) || []), holdings, { realized: closed.reduce((s, c) => s + c.pnl, 0) });
+}
+
+/** Ghi một dòng tiền: DEPOSIT / WITHDRAW / DIVIDEND / SET, số tiền (đồng), ngày. */
+export async function addCash(body = {}) {
+  await load();
+  const type = String(body.type || '').toUpperCase();
+  const amount = Math.round(Number(body.amount));
+  const date = String(body.date || new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)).slice(0, 10);
+  if (!CASH_TYPES[type]) throw new Error('Loại không hợp lệ (nạp tiền, rút tiền, cổ tức tiền, lãi vòng trước, đặt số dư)');
+  if (!(amount >= (type === 'SET' ? 0 : 1)) || amount > 1e13) throw new Error('Số tiền không hợp lệ (đồng, ví dụ 50000000)');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) throw new Error('Ngày không hợp lệ (YYYY-MM-DD)');
+  if (Date.parse(date) > Date.now() + DAY) throw new Error('Ngày không được ở tương lai');
+  if (type === 'WITHDRAW') {
+    const idx = (await getPriceHistory('VNINDEX').catch(() => null))?.bars.map((b) => b.time) || [];
+    const l = cashLedger(state.transactions.filter((t) => t.date <= date), state.cash.filter((c) => c.date <= date), idx);
+    if (l.known && amount > l.available) throw new Error(`Không đủ tiền để rút: khả dụng ${Math.round(l.available).toLocaleString('vi-VN')} đ`);
+  }
+  const seq = state.cash.reduce((m, c) => Math.max(m, c.seq || 0), 0) + 1;
+  const c = { id: `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, seq, type, amount, date, note: String(body.note || '').slice(0, 200) };
+  state.cash.push(c);
+  await save();
+  return c;
+}
+
+export async function removeCash(id) {
+  await load();
+  const before = state.cash.length;
+  state.cash = state.cash.filter((c) => c.id !== id);
+  if (state.cash.length === before) throw new Error('Không tìm thấy dòng tiền');
+  await save();
+  return { ok: true };
+}
+
 /** Báo cáo danh mục đầy đủ cho giao diện. */
 export async function getPortfolio() {
-  await load();
+  await load(true);
   const { positions, closed } = buildPositions(state.transactions);
   const open = positions.filter((p) => p.qty > 0);
   const [indexRes, ...priceRes] = await Promise.all([
@@ -212,24 +389,35 @@ export async function getPortfolio() {
     const marketValue = close != null ? p.qty * close * 1000 : 0;
     const net = marketValue * (1 - BROKERAGE - SELL_TAX);
     let tech = null;
+    const avgCost = round(p.cost / p.qty / 1000, 3);
     if (b?.length >= 30) {
       const t = technicalAnalysis(b, null, {});
       tech = { score: t.score, trend: t.overview.find((o) => o.key === 'trend')?.verdict, stopLoss: t.plan?.stopLoss, target: t.plan?.target };
     }
+    // Luật nắm giữ (HOLD_RULE): cảnh báo theo giá đóng cửa dưới −15% giá vốn, xem lại sau 40 phiên
+    const heldSessions = b && p.openedAt ? b.filter((x) => x.time > p.openedAt).length : null;
+    const hold = holdPlan({ entryPrice: avgCost, currentPrice: close, heldSessions });
     const pending = Math.min(p.qty, pendingQty(p.lots, sessions));
     return {
       symbol: p.symbol, qty: p.qty, sellable: p.qty - pending, pending,
-      avgCost: round(p.cost / p.qty / 1000, 3), close, priceDate: b?.at(-1)?.time ?? null,
+      avgCost, close, priceDate: b?.at(-1)?.time ?? null,
       marketValue: Math.round(marketValue), cost: Math.round(p.cost),
       unrealized: Math.round(net - p.cost), unrealizedPct: round(((net - p.cost) / p.cost) * 100, 2),
       dayChange: close != null ? Math.round(p.qty * (close - prev) * 1000) : null,
       realized: Math.round(p.realized), openedAt: p.openedAt, tech,
-      belowStop: tech?.stopLoss != null && close != null && close < tech.stopLoss,
+      hold, heldSessions,
+      effectiveStop: hold?.warnStop ?? null,
+      belowStop: close != null && hold != null && hold.belowWarn,
     };
   }).sort((a, b) => b.marketValue - a.marketValue);
 
   const total = holdings.reduce((s, h) => s + h.marketValue, 0);
   holdings.forEach((h) => (h.weight = total ? round(h.marketValue / total, 4) : 0));
+  const ledger = cashLedger(state.transactions, state.cash, sessions);
+  const capital = capitalSummary(ledger, holdings, { realized: closed.reduce((s, c) => s + c.pnl, 0) });
+  // Lệnh cũ có giá lệch hẳn biên phiên: nguyên nhân hay gặp khiến tiền mặt / lãi lỗ sai
+  const priceWarnings = state.transactions.map((t) => priceOutOfRange(t, bars[t.symbol])).filter(Boolean);
+  if (priceWarnings.length) capital.priceWarnings = priceWarnings;
   const cost = holdings.reduce((s, h) => s + h.cost, 0);
   const unrealized = holdings.reduce((s, h) => s + h.unrealized, 0);
   return {
@@ -242,6 +430,7 @@ export async function getPortfolio() {
       positions: holdings.length,
     },
     holdings,
+    capital, cashHistory: ledger.events.slice().reverse().slice(0, 100),
     risk: holdings.length ? riskXray(holdings, bars, indexRes?.bars) : null,
     behavior: behavior(closed),
     closed: closed.slice().reverse(),
@@ -270,6 +459,8 @@ export async function addTransaction(body) {
   const info = await getCompanyInfo(symbol).catch(() => undefined);
   if (info === null) throw new Error(`Không tìm thấy mã ${symbol}`);
   if (info?.exchange && !floors.includes(info.exchange)) throw new Error(`${symbol} niêm yết trên sàn ${info.exchange}. Tool chỉ theo dõi cổ phiếu sàn ${floors.join(', ')}.`);
+  const bad = priceOutOfRange({ symbol, type, date, price }, (await getPriceHistory(symbol).catch(() => null))?.bars);
+  if (bad) throw new Error(`Giá ${price} không khớp phiên ${date}: ${symbol} giao dịch trong khoảng ${bad.low}–${bad.high} (nghìn đồng). Kiểm tra lại giá, mã hoặc ngày.`);
 
   const seq = (state.transactions.reduce((m, t) => Math.max(m, t.seq || 0), 0)) + 1;
   const tx = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, seq, type, symbol, qty, price, date, note: String(body.note || '').slice(0, 200) };
@@ -290,4 +481,15 @@ export async function removeTransaction(id) {
   if (state.transactions.length === before) throw new Error('Không tìm thấy giao dịch');
   await save();
   return { ok: true };
+}
+
+/** Xóa toàn bộ giao dịch của một mã chứng khoán khỏi danh mục. */
+export async function removeSymbol(symbol) {
+  await load();
+  const sym = String(symbol || '').trim().toUpperCase();
+  const before = state.transactions.length;
+  state.transactions = state.transactions.filter((t) => t.symbol !== sym);
+  if (state.transactions.length === before) throw new Error(`Không tìm thấy mã ${sym} trong danh mục`);
+  await save();
+  return { ok: true, symbol: sym, deletedCount: before - state.transactions.length };
 }

@@ -197,7 +197,7 @@ này sát giá hiện tại. Thực tế đã kiểm chứng: biến động th�
 Nguyên tắc:
 - Chỉ dùng số liệu có trong dữ liệu; không bịa thêm số liệu, sự kiện hay tin tức. Thiếu dữ liệu thì ghi vào dataGaps.
 - Cân nhắc cả xu hướng kỹ thuật, định giá, chất lượng tăng trưởng, tin tức và bối cảnh VN-Index.
-- Điểm xếp hạng 4 yếu tố là tín hiệu định lượng đã kiểm chứng; điểm kỹ thuật kiểu cũ chỉ để tham khảo. Chỉ chọn MUA khi
+- Điểm xếp hạng 4 yếu tố là tín hiệu định lượng chính (lợi thế lịch sử nhỏ, không chắc chắn); điểm kỹ thuật kiểu cũ chỉ để tham khảo. Chỉ chọn MUA khi
   mã thuộc nhóm điểm ≥ 70 và giá trên MA200, trừ khi có lý do rất rõ trong dữ liệu.
 - Không dựa vào một chỉ báo đơn lẻ: xác nhận chéo xu hướng (MA + ADX), động lượng (RSI + MACD + Stochastic),
   dòng tiền (MFI + OBV + khối lượng + khối ngoại) và sức mạnh tương đối so với VN-Index. Nêu rõ khi các nhóm mâu thuẫn.
@@ -366,11 +366,11 @@ function buildPrompt(a) {
 
   if (a.ranking) {
     const r = a.ranking;
-    lines.push('\n## Điểm xếp hạng 4 yếu tố (tín hiệu CHÍNH, đã kiểm chứng ngoài mẫu)');
+    lines.push('\n## Điểm xếp hạng 4 yếu tố (tín hiệu CHÍNH)');
     lines.push(`Điểm ${r.score}/100, hạng ${r.position}/${r.universe} trong rổ HOSE thanh khoản ≥ 5 tỷ; giá ${r.aboveMa200 === false ? 'DƯỚI' : 'trên'} MA200. Phân vị: động lượng 12 tháng ${r.parts.mom ?? 'n/a'}, gần đỉnh 52 tuần ${r.parts.high ?? 'n/a'}, biến động thấp ${r.parts.atr ?? 'n/a'}, ADX ${r.parts.adx ?? 'n/a'}.`);
     lines.push(`Khuyến nghị hệ thống: ${a.recommendation.label} — ${a.recommendation.desc}`);
-    lines.push('Bằng chứng lịch sử 2022–2026: chỉ nhóm điểm ≥ 70 và trên MA200 thắng VN-Index ổn định (+0,7–0,9%/20 phiên); nhóm ≥ 70 nhưng dưới MA200 thua 1–1,5%; các nhóm khác không có lợi thế.');
-    lines.push(`Hạng trong nhóm trên MA200: ${r.pfRank ?? 'không thuộc nhóm (dưới MA200)'}. Danh mục mẫu của hệ thống là top 8 mã trên MA200, đổi mỗi 20 phiên; từng mã được chọn chỉ thắng VN-Index ~51% số lần trong lịch sử, lợi thế đến từ cả rổ và kỷ luật cắt lỗ, và 12 tháng gần nhất danh mục này thua VN-Index.`);
+    lines.push('Lưu ý bằng chứng: nghiên cứu cũ cho nhóm ≥ 70 trên MA200 lợi thế nhỏ so với VN-Index nhưng chạy trên rổ hiện tại (thiên lệch sống sót), nên lợi thế thật có thể nhỏ hơn hoặc không có. Không coi điểm xếp hạng là chắc chắn.');
+    lines.push(`Hạng trong nhóm trên MA200: ${r.pfRank ?? 'không thuộc nhóm (dưới MA200)'}. Danh mục mẫu của hệ thống là top 8 mã trên MA200, đổi mỗi 20 phiên; từng mã được chọn chỉ thắng VN-Index ~51% số lần trong lịch sử, lợi thế (nếu có) đến từ cả rổ chứ không từ từng mã (danh mục mẫu không dùng cắt lỗ), và 12 tháng gần nhất danh mục này thua VN-Index.`);
   }
   lines.push('\n## Điểm kỹ thuật/cơ bản/tin tức kiểu cũ (−100..100) — CHỈ THAM KHẢO: đã kiểm chứng KHÔNG dự báo được hướng giá');
   lines.push(`Tổng ${a.total} (${a.legacy?.label ?? ''}). Kỹ thuật ${a.scores.technical}, cơ bản ${a.scores.fundamental ?? 'n/a'}, tin tức ${a.scores.news ?? 'n/a'}.`);
@@ -389,6 +389,8 @@ function buildPrompt(a) {
       lines.push('Người đang giữ: ' + b.steps.hold.map(step).join(' | '));
     }
   }
+  const cap = capitalLine(a.capital);
+  if (cap) lines.push(cap);
   lines.push('\nHãy phân tích và trả về JSON theo schema.');
   return lines.join('\n');
 }
@@ -536,6 +538,14 @@ export function aiAnalyze(analysis, { force = false } = {}) {
 
 export { buildPrompt };
 
+/** Vốn của nhà đầu tư (Danh mục): để AI không đề xuất mua vượt tiền mặt và đúng một suất. */
+export function capitalLine(c) {
+  if (!c?.nav) return '';
+  const tr = (v) => `${Math.round(v / 1e6).toLocaleString('vi-VN')} triệu`;
+  return `\n## Vốn của nhà đầu tư\nTổng tài sản ${tr(c.nav)}${c.available != null ? `, tiền mặt dùng được ${tr(c.available)}` : ''}; quy tắc: tối đa ${c.slots} mã, `
+    + `một suất ≈ ${c.slotValue ? tr(c.slotValue) : '–'}, đang giữ ${c.picks} mã (còn ${c.freeSlots} suất). Không đề xuất mua quá một suất hay quá tiền mặt đang có.`;
+}
+
 // ---------- Xếp hạng cổ phiếu tiềm năng (một lần gọi cho cả danh sách) ----------
 export const PICK_VERDICTS = { MUA: 'MUA', MUA_THAM_DO: 'MUA THĂM DÒ', CHO_DIEM_MUA: 'CHỜ ĐIỂM MUA', LOAI: 'LOẠI' };
 
@@ -560,9 +570,10 @@ const PICK_SCHEMA = {
           stopLoss: { type: 'NUMBER' },
           target: { type: 'NUMBER' },
           horizon: { type: 'STRING', description: 'Khung thời gian nắm giữ' },
+          horizonDays: { type: 'INTEGER', description: 'Số PHIÊN giao dịch dự kiến để giá đạt mục tiêu (5–60)' },
         },
-        required: ['symbol', 'verdict', 'confidence', 'thesis', 'trigger', 'mainRisk', 'entryFrom', 'entryTo', 'stopLoss', 'target', 'horizon'],
-        propertyOrdering: ['symbol', 'thesis', 'mainRisk', 'verdict', 'confidence', 'trigger', 'entryFrom', 'entryTo', 'stopLoss', 'target', 'horizon'],
+        required: ['symbol', 'verdict', 'confidence', 'thesis', 'trigger', 'mainRisk', 'entryFrom', 'entryTo', 'stopLoss', 'target', 'horizon', 'horizonDays'],
+        propertyOrdering: ['symbol', 'thesis', 'mainRisk', 'verdict', 'confidence', 'trigger', 'entryFrom', 'entryTo', 'stopLoss', 'target', 'horizon', 'horizonDays'],
       },
     },
     note: { type: 'STRING', description: 'Lưu ý chung về quản lý vốn khi mua các mã này' },
@@ -584,7 +595,10 @@ Nguyên tắc:
 - Thị trường chung xấu thì hạ mức quyết định (MUA → MUA_THAM_DO hoặc CHO_DIEM_MUA) và nói rõ.
 - Mã đã tăng nóng (RSI > 70, xa MA20) thì chọn CHO_DIEM_MUA với vùng mua thấp hơn giá hiện tại.
 - LOAI nếu rủi ro lớn hơn tiềm năng. Được phép loại nhiều mã.
-- Giá tính bằng nghìn đồng; cắt lỗ < vùng mua < mục tiêu; tỷ lệ lợi nhuận/rủi ro nên ≥ 1,5.
+- Giá tính bằng nghìn đồng; cắt lỗ < vùng mua < mục tiêu; tỷ lệ lợi nhuận/rủi ro nên ≥ 1,5. horizonDays = số phiên giao dịch.
+- Mỗi mã có "Thống kê lịch sử" của nhóm điểm (4 năm, rổ theo thời điểm): lãi hơn rổ trung bình và khoảng p10–p90 sau 20 phiên.
+  Đó là căn cứ cho con số %: mục tiêu vượt p90 + lãi của rổ thì phải nêu rõ lý do riêng của mã (tin, kết quả kinh doanh);
+  không có lý do riêng thì đặt mục tiêu trong khoảng đó. Mục tiêu và horizonDays sẽ được chấm lại khi đủ phiên.
 - Viết tiếng Việt CÓ DẤU đầy đủ, ngắn gọn, có con số. Trong văn bản không viết mã kỹ thuật như CHO_DIEM_MUA, MUA_THAM_DO;
   dùng "chờ điểm mua", "mua thăm dò".`;
 
@@ -610,6 +624,10 @@ function pickPrompt(cands, marketFlow, market) {
     L.push(`P/E ${f.pe?.toFixed?.(1) ?? 'n/a'}, P/B ${f.pb?.toFixed?.(2) ?? 'n/a'}, ROE ${f.roe != null ? (f.roe * 100).toFixed(1) + '%' : 'n/a'}, LN 4Q ${f.profitGrowthTTM != null ? (f.profitGrowthTTM * 100).toFixed(0) + '%' : 'n/a'}, DT 4Q ${f.revenueGrowthTTM != null ? (f.revenueGrowthTTM * 100).toFixed(0) + '%' : 'n/a'}`);
     if (c.foreign) L.push(`Khối ngoại: 5 phiên ${(c.foreign.net5 / 1e9).toFixed(1)} tỷ, 20 phiên ${(c.foreign.net20 / 1e9).toFixed(1)} tỷ`);
     if (c.plan) L.push(`Hỗ trợ ${c.plan.support}, kháng cự ${c.plan.resistance}, ATR ${c.plan.atr}`);
+    if (c.mathProb) L.push(`Xác suất & Kỳ vọng toán học: EV ${c.mathProb.ev}%, Kelly ${c.mathProb.kelly}, Tỷ lệ thắng ${Math.round(c.mathProb.pWin * 100)}%, Hòa vốn ${Math.round(c.mathProb.breakEven * 100)}% → ${c.mathProb.pass ? 'ĐẠT' : 'KHÔNG ĐẠT (' + c.mathProb.note + ')'}`);
+    if (c.warnings?.length) L.push(`CẢNH BÁO RỦI RO: ${c.warnings.join('; ')}`);
+    const ex = c.expectation?.h20;
+    if (ex) L.push(`Thống kê lịch sử nhóm điểm ${c.expectation.bucket.from}–${c.expectation.bucket.to} ${c.expectation.bucket.aboveMa200 ? 'trên' : 'dưới'} MA200 (4 năm): sau 20 phiên hơn rổ TB ${(ex.meanExcess * 100).toFixed(1)}%, p10 ${(ex.p10 * 100).toFixed(1)}%, p90 ${(ex.p90 * 100).toFixed(1)}%, thắng rổ ${Math.round(ex.pBeat * 100)}%, lãi tuyệt đối TB ${(ex.meanReturn * 100).toFixed(1)}%${ex.significant ? '' : ' (chưa có ý nghĩa thống kê)'}`);
     for (const n of (c.news || []).slice(0, 4)) L.push(`- Tin [${n.label}${n.reaction ? `, giá ${n.reaction.pct}%` : ''}]: ${n.title}`);
   }
   L.push('\nĐánh giá từng mã và trả về JSON theo schema.');
@@ -645,6 +663,7 @@ export async function aiPickStocks(cands, { marketFlow = null, market = null } =
       stopLoss: sl != null && (lo == null || sl < lo) ? sl : null,
       target: tg != null && tg > (hi ?? c.close) ? tg : null,
       horizon: String(p.horizon || ''),
+      horizonDays: Number.isFinite(p.horizonDays) ? Math.min(60, Math.max(5, Math.round(p.horizonDays))) : 20,
     };
   }).filter(Boolean);
   return {

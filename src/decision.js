@@ -4,6 +4,7 @@
 import { RECOMMENDATIONS } from './analyze.js';
 import { tradeSteps } from './tradeplan.js';
 import { actionFor } from './brief.js';
+import { pinnedNote } from './picks.js';
 
 // Thứ tự từ thận trọng nhất đến tích cực nhất
 const LEVEL = { SELL: 0, AVOID: 1, HOLD: 2, ACCUMULATE: 3, BUY: 4 };
@@ -115,25 +116,38 @@ export function finalDecision(a, ai, committee = null) {
   if (!b || !ai) return null;
   const sys = a.recommendation.code;
   const src = committee?.decision ? committee : ai;
-  const { code, relation, aiCode } = fuseDecision(sys, src.decision);
+  const fused = fuseDecision(sys, src.decision);
+  const { relation, aiCode } = fused;
+  // Giá bị ghim (chào mua/hoán đổi): mua vào không có dư địa lãi, tối đa là GIỮ
+  const pinned = LEVEL[fused.code] > LEVEL.HOLD ? pinnedNote(a.recentBars) : null;
+  // Phủ quyết toán học: Kỳ vọng EV âm hoặc vi phạm Kelly
+  const mathVeto = (LEVEL[fused.code] > LEVEL.HOLD && (a.mathProb ?? b.mathProb) && !(a.mathProb ?? b.mathProb).pass) ? (a.mathProb ?? b.mathProb) : null;
+  const code = pinned || mathVeto ? 'HOLD' : fused.code;
   const label = RECOMMENDATIONS.find((r) => r.code === code)?.label || code;
   const sysLabel = a.recommendation.label;
   const who = committee ? 'Hội đồng đầu tư' : 'AI';
   const why = committee ? (committee.debateSummary || '') : (ai.planReview?.reason || ai.headline || '');
   const bad = (ai.marketChecks || []).filter((x) => x.status === 'XAU').map((x) => x.label.toLowerCase());
   let note;
-  if (relation === 'stricter') note = `${who} hạ từ ${sysLabel} xuống ${label}${bad.length ? ` (yếu tố xấu: ${bad.join(', ')})` : ''}. ${why}`;
-  else if (relation === 'looser') note = `${who} tích cực hơn (${src.decisionLabel}) nhưng tín hiệu định lượng chưa xác nhận nên giữ ${label}. ${why}`;
-  else note = `${who} đồng ý ${label}. ${why}`;
+  if (mathVeto) {
+    note = `Phủ quyết Toán học (Mathematical Veto): ${mathVeto.reasons[0] || 'Kỳ vọng toán học âm'}. Dù ${who} có đề xuất ${src.decisionLabel || 'mua'}, hệ thống buộc giữ mức ${label} để bảo toàn vốn. ${why}`;
+  } else if (relation === 'stricter') {
+    note = `${who} hạ từ ${sysLabel} xuống ${label}${bad.length ? ` (yếu tố xấu: ${bad.join(', ')})` : ''}. ${why}`;
+  } else if (relation === 'looser') {
+    note = `${who} tích cực hơn (${src.decisionLabel}) nhưng tín hiệu định lượng chưa xác nhận nên giữ ${label}. ${why}`;
+  } else {
+    note = `${who} đồng ý ${label}. ${why}`;
+  }
+  if (pinned) note = `Không mua mới: ${pinned}. ${note}`;
 
   const i = a.technical.indicators;
   const holding = a.holding ?? b.holding ?? null;
   const steps = b.levels ? tradeSteps(code, b.levels, {
     weight: b.levels.weight ?? 0.1, rsi: i.rsi14, avgVol20: i.avgVolume20, ma200: i.sma200,
-    score: a.ranking?.score, aboveMa200: a.ranking?.aboveMa200, holding,
+    score: a.ranking?.score, aboveMa200: a.ranking?.aboveMa200, holding, holdStop: b.levels.holdStop,
     marketWait: relation === 'stricter' && bad.length ? `các yếu tố thị trường cải thiện (${bad.join(', ')})` : null,
   }) : null;
-  const holder = committee ? holderPlan(code, committee.holderPlan, { close: a.price.close, stop: b.levels?.stop, holding }) : null;
+  const holder = committee ? holderPlan(code, committee.holderPlan, { close: a.price.close, stop: b.levels?.holdStop ?? b.levels?.stop, holding }) : null;
   if (steps && holder?.steps.length) steps.hold = holder.steps;
   return {
     code, label, tone: TONE[code], relation, aiCode,

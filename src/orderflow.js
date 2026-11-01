@@ -51,9 +51,17 @@ export function summarizeTicks(ticks, bigValue = BIG_ORDER_VALUE) {
   return s;
 }
 
+const intradayTTL = () => {
+  const vn = new Date(Date.now() + 7 * 3600_000);
+  const day = vn.getUTCDay();
+  const m = vn.getUTCHours() * 60 + vn.getUTCMinutes();
+  const isTrading = day >= 1 && day <= 5 && ((m >= 540 && m <= 695) || (m >= 780 && m <= 905));
+  return isTrading ? 3 * MIN : 30 * MIN;
+};
+
 /** Mua/bán chủ động của phiên gần nhất (đọc toàn bộ lệnh khớp, tối đa 6 trang × 5000 lệnh). Lưu lại theo ngày. */
 export function getIntradayFlow(symbol) {
-  return cached(`intraday-flow:${symbol}`, 3 * MIN, async () => {
+  return cached(`intraday-flow:${symbol}`, intradayTTL(), async () => {
     const ticks = [];
     let date = null;
     // Phải sắp xếp theo KL lũy kế: không sắp xếp thì các trang trùng / sót lệnh. API không trả tổng số trang,

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { priceLevels, tradeSteps, splitShares, tick } from '../src/tradeplan.js';
+import { priceLevels, tradeSteps, splitShares, tick, holdPlan } from '../src/tradeplan.js';
 
 const day = (i) => new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10);
 // Chuỗi dao động quanh xu hướng tăng: có đỉnh/đáy rõ
@@ -26,24 +26,44 @@ test('Chia cổ phiếu: lô 100 khi ≥ 300 cp, dư dồn vào bước cuối',
 
 const L = { r2: 22.2, r1: 21.2, close: 20.9, s1: 20.75, s2: 20.1, stop: 19.85, atr: 0.42 };
 
-test('NÊN MUA, chưa có: 3 lần mua (hỗ trợ gần, hỗ trợ 2, bứt phá) tổng đúng tỷ trọng + cắt lỗ', () => {
-  const { fresh } = tradeSteps('BUY', L, { weight: 0.2, rsi: 55, avgVol20: 1e6 });
+test('NÊN MUA, chưa có: một lệnh LO ở giá đóng cửa, đủ một suất, cảnh báo xa, giữ 40 phiên', () => {
+  const { fresh } = tradeSteps('BUY', { ...L, stop: 17.75 }, { weight: 0.1 });
   const buys = fresh.filter((x) => x.side === 'buy');
-  assert.equal(buys.length, 3);
-  assert.ok(Math.abs(buys.reduce((t, x) => t + x.portion, 0) - 0.2) < 1e-9);
-  assert.match(buys[2].condition, /21,2 với khối lượng > 1\.500\.000 cp/);
-  assert.equal(fresh.at(-1).side, 'stop');
-  // RSI nóng: lần 1 chờ giá lùi về hỗ trợ, không mua quanh giá hiện tại
-  assert.ok(tradeSteps('BUY', L, { weight: 0.2, rsi: 78 }).fresh[0].zone[1] < L.close);
+  assert.equal(buys.length, 1);
+  assert.equal(buys[0].price, L.close);
+  assert.equal(buys[0].portion, 0.1);
+  assert.match(fresh.find((x) => x.side === 'stop').condition, /dưới 17,75 \(−15% giá mua\)/);
+  assert.match(fresh.at(-1).condition, /Giữ khoảng 40 phiên/);
+  assert.equal(tradeSteps('ACCUMULATE', L, { weight: 0.1 }).fresh[0].portion, 0.05); // mua thăm dò nửa suất
 });
 
-test('Đang nắm giữ: số cp mỗi bước bán theo vị thế thật, giảm (không phải chốt lời) khi dưới giá vốn', () => {
-  const { hold } = tradeSteps('HOLD', L, { holding: { qty: 3000, avgCost: 23, pnlPct: -0.09 } });
-  const sells = hold.filter((x) => x.side === 'sell');
-  assert.deepEqual(sells.map((x) => x.shares), [1000, 1000]);
-  assert.ok(sells.every((x) => /^Giảm/.test(x.condition)));
-  assert.ok(hold.some((x) => x.side === 'wait' && x.shares === 1000));
-  assert.equal(hold.find((x) => x.side === 'stop').shares, 3000);
-  const t2 = tradeSteps('AVOID', { ...L, close: 19.5 }, { holding: { qty: 500, avgCost: 21 } });
-  assert.match(t2.hold[0].condition, /thủng cắt lỗ/);
+test('Đang nắm giữ: giữ đến hạn 40 phiên, đến hạn mà rời nhóm mua thì bán; ⛔ cân nhắc bán sớm', () => {
+  const h = { qty: 3000, avgCost: 23, pnlPct: -0.09 };
+  const early = tradeSteps('HOLD', L, { holding: h, heldSessions: 10, holdStop: 19.55 }).hold;
+  assert.equal(early[0].side, 'wait');
+  assert.match(early[0].condition, /đã giữ 10\/40 phiên/);
+  assert.equal(early.find((x) => x.side === 'stop').shares, 3000);
+  const due = tradeSteps('HOLD', L, { holding: h, heldSessions: 40, holdStop: 19.55 }).hold;
+  assert.equal(due[0].side, 'sell');
+  assert.equal(due[0].shares, 3000);
+  assert.match(tradeSteps('AVOID', L, { holding: h, avoid: true, holdStop: 19.55 }).hold[0].condition, /⛔/);
+  // Đã dưới ngưỡng cảnh báo: nhắc lên đầu, không bình quân giá xuống
+  const t2 = tradeSteps('HOLD', { ...L, close: 19 }, { holding: { qty: 500, avgCost: 23 }, holdStop: 19.55 });
+  assert.match(t2.hold[0].condition, /dưới ngưỡng cảnh báo 19,55/);
+});
+
+test('holdPlan: một ngưỡng thoát −15% theo giá vốn, không nâng khi đang lãi, xem lại sau 40 phiên', () => {
+  const flat = holdPlan({ entryPrice: 20, currentPrice: 20.4 });
+  assert.equal(flat.warnStop, 17);
+  assert.equal(flat.belowWarn, false);
+  assert.equal(flat.reviewAfter, 40);
+  // Lãi 20%: ngưỡng KHÔNG dời lên hòa vốn / khóa lãi (bộ đo: các cách đó làm lãi giảm)
+  const win = holdPlan({ entryPrice: 20, currentPrice: 24, heldSessions: 12 });
+  assert.equal(win.warnStop, 17);
+  assert.equal(win.pnlPct, 20);
+  assert.equal(win.reviewDue, false);
+  assert.equal(holdPlan({ entryPrice: 20, currentPrice: 16.9 }).belowWarn, true);
+  assert.equal(holdPlan({ entryPrice: 20, heldSessions: 40 }).reviewDue, true);
+  assert.equal(holdPlan({}), null);
+  assert.match(win.label, /không chốt lời theo mốc/);
 });

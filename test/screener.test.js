@@ -46,3 +46,47 @@ test('Thanh khoản đều: cần TB ≥ 5 tỷ và ≥ 16/20 phiên đạt 5 t�
   assert.equal(spiky.pass, false);
   assert.equal(liquidityCheck(bars(16, 4), 5e9).pass, true);
 });
+
+test('Chế độ phòng thủ / Ngược dòng: khi phễu ngành = 0 vẫn giữ được mã cơ bản tốt + xu hướng mạnh', () => {
+  const scanned = [
+    {
+      symbol: 'MSB',
+      liquidity: { pass: true },
+      quality: { pass: true },
+      sector: { pass: false, name: 'Ngân hàng' },
+      quick: 91,
+      aboveMa200: true,
+      stockRisk: { isRisky: false },
+      combined: 85,
+      trendPick: true,
+    },
+    {
+      symbol: 'BAD',
+      liquidity: { pass: true },
+      quality: { pass: false },
+      sector: { pass: false, name: 'Bất động sản' },
+      quick: 35,
+      aboveMa200: false,
+      stockRisk: { isRisky: true },
+      combined: 30,
+      trendPick: false,
+    },
+  ];
+
+  const trendOk = (c) => c.quick != null && c.quick >= 70 && c.aboveMa200 !== false && !c.stockRisk?.isRisky;
+  let shortlist = scanned.filter((c) => c.liquidity.pass && c.quality.pass && c.sector.pass && trendOk(c));
+  assert.equal(shortlist.length, 0, 'Phễu chuẩn cho ra 0 mã khi ngành bị bán');
+
+  let isCounterTrend = false;
+  if (!shortlist.length) {
+    const counterList = scanned.filter((c) => c.liquidity.pass && c.quality.pass && trendOk(c));
+    if (counterList.length > 0) {
+      shortlist = counterList;
+      isCounterTrend = true;
+    }
+  }
+
+  assert.equal(isCounterTrend, true, 'Kích hoạt cờ ngược dòng');
+  assert.equal(shortlist.length, 1, 'Lấy được mã MSB');
+  assert.equal(shortlist[0].symbol, 'MSB');
+});

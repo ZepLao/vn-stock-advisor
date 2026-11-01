@@ -312,7 +312,7 @@ export function calcMetrics(values, trades, initialCash, benchValues = null) {
 // ---------- Kiểm định độ tin cậy (tham khảo validation.py của Vibe-Trading) ----------
 
 // Bộ sinh số ngẫu nhiên có seed để kết quả lặp lại được
-function rng(seed) {
+export function rng(seed) {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;

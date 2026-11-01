@@ -11,9 +11,12 @@ import { getMarketMovers, screenCriteria } from './src/data.js';
 import { getScreener, startScreener, rerunScreenerAi, startScreenerSchedule } from './src/screener.js';
 import { runBacktest, listStrategies } from './src/backtest.js';
 import { startCommittee, getCommittee } from './src/committee.js';
-import { getPortfolio, addTransaction, removeTransaction } from './src/portfolio.js';
+import { getPortfolio, addTransaction, removeTransaction, removeSymbol, addCash, removeCash } from './src/portfolio.js';
 import { getRankBoard, runRankPortfolio } from './src/ranking.js';
+import { runLiveBacktest } from './src/livebacktest.js';
+import { runRollingPortfolio } from './src/rolling.js';
 import { evaluatePredictions } from './src/predictions.js';
+import { getVerification } from './src/verify.js';
 import { startHistorySchedule, listSnapshots } from './src/history.js';
 import { getSectorFlows } from './src/sectors.js';
 import { getChartSeries } from './src/chartdata.js';
@@ -22,8 +25,10 @@ import { getForecast } from './src/forecast.js';
 import { telegramConfig, sendReport, buildReport, startTelegramSchedule, sendMessage } from './src/telegram.js';
 import { startSelfReview, runSelfReview, lastReview } from './src/selfreview.js';
 import { getTuning, tuningLog } from './src/tuning.js';
+import { getMarketRegime } from './src/regime.js';
 import { startDbSync, syncAll } from './src/db.js';
 import { startRadar, getRadar, radarTick, RADAR } from './src/radar.js';
+import { startHoldWatch, HOLD_RULES } from './src/holdwatch.js';
 import { startTelegramBot } from './src/telegrambot.js';
 import { startOutlookSchedule, buildOutlook, getOutlook, formatOutlook } from './src/outlook.js';
 import { startIntraday, captureIntraday, INTRADAY_MINUTES } from './src/intraday.js';
@@ -36,6 +41,13 @@ import {
 const PORT = Number(process.env.PORT) || 3000;
 const SCAN_MINUTES = Number(process.env.SCAN_MINUTES) || 10;
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), 'public');
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Process] Unhandled Rejection:', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught Exception:', err?.message || err);
+});
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -128,11 +140,48 @@ const routes = [
     const { ref, ...board } = await getRankBoard();
     send(res, 200, board);
   }],
+  // Siêu cổ phiếu chuẩn xu hướng 8 năm (Trend Picks)
+  ['GET', /^\/api\/trend-picks$/, async (req, res) => {
+    const board = await getRankBoard();
+    const items = (board.rows || []).filter((r) => r.trendPick);
+    send(res, 200, { date: board.date, count: items.length, items });
+  }],
+  // Quét cổ phiếu rủi ro cao / lao dốc trên thị trường
+  ['GET', /^\/api\/risk-scanner$/, async (req, res) => {
+    const board = await getRankBoard();
+    const items = (board.rows || []).filter((r) => r.trend?.trendState === 'DOWN' && r.factors?.high <= -0.30);
+    send(res, 200, { date: board.date, count: items.length, items });
+  }],
+  // Metadata tên và ngành 2.000+ mã chứng khoán Việt Nam
+  ['GET', /^\/api\/stock-names$/, async (req, res) => {
+    try {
+      const file = join(dirname(fileURLToPath(import.meta.url)), 'data', 'stock_names.json');
+      const content = await readFile(file, 'utf8');
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
+      res.end(content);
+    } catch {
+      send(res, 200, {});
+    }
+  }],
+  // Chế độ thị trường: Đếm ngày phân phối, độ rộng thị trường & kiểm soát tỷ trọng
+  ['GET', /^\/api\/market-regime$/, async (req, res) => send(res, 200, await getMarketRegime())],
   ['GET', /^\/api\/rank\/backtest$/, async (req, res) => {
     const q = Object.fromEntries(new URL(req.url, 'http://localhost').searchParams);
     send(res, 200, await runRankPortfolio({ years: q.years, top: q.top, rebalance: q.rebalance, buffer: q.buffer, earnings: q.earnings, trendFilter: q.trend, regime: q.regime, initialCash: q.cash }));
   }],
+  // Backtest đúng quy trình khuyến nghị: vùng mua chia lần, cắt lỗ neo ngày mua, chốt 1/3, regime, định cỡ theo rủi ro
+  ['GET', /^\/api\/live-backtest$/, async (req, res) => {
+    const q = Object.fromEntries(new URL(req.url, 'http://localhost').searchParams);
+    send(res, 200, await runLiveBacktest({ years: q.years, initialCash: q.cash, regimeFilter: q.regime }));
+  }],
+  // Backtest quy tắc đang dùng: danh mục cuốn chiếu (10 mã, ≤ 3/ngành, bổ sung mỗi 5 phiên, giữ 40 phiên, không cắt lỗ)
+  ['GET', /^\/api\/rolling-backtest$/, async (req, res) => {
+    const q = Object.fromEntries(new URL(req.url, 'http://localhost').searchParams);
+    send(res, 200, await runRollingPortfolio({ years: q.years, initialCash: q.cash, ...(q.sizing ? { sizing: q.sizing } : {}), ...(q.stop ? { stopPct: Number(q.stop) } : {}) }));
+  }],
   ['GET', /^\/api\/predictions$/, async (req, res) => send(res, 200, await evaluatePredictions())],
+  // Kiểm chứng các giả thuyết chọn trước (IC, nhóm mua, độ phủ dải, AI so với luật) kèm t Newey-West
+  ['GET', /^\/api\/verification$/, async (req, res) => send(res, 200, await getVerification())],
   ['GET', /^\/api\/history$/, async (req, res) => send(res, 200, { dates: await listSnapshots() })],
   // Dòng tiền theo nhóm ngành: /api/sectors?period=1|5|20
   ['GET', /^\/api\/sectors$/, async (req, res) => {
@@ -149,6 +198,22 @@ const routes = [
     }
   }],
   ['DELETE', /^\/api\/portfolio\/tx\/([^/]+)$/, async (req, res, [id]) => send(res, 200, await removeTransaction(id))],
+  ['DELETE', /^\/api\/portfolio\/symbol\/([^/]+)$/, async (req, res, [sym]) => {
+    try {
+      send(res, 200, await removeSymbol(sym));
+    } catch (err) {
+      send(res, 400, { error: err.message });
+    }
+  }],
+  // Quản lý vốn: nạp / rút / cổ tức tiền / đặt số dư
+  ['POST', /^\/api\/portfolio\/cash$/, async (req, res) => {
+    try {
+      send(res, 200, await addCash(await readBody(req)));
+    } catch (err) {
+      send(res, 400, { error: err.message });
+    }
+  }],
+  ['DELETE', /^\/api\/portfolio\/cash\/([^/]+)$/, async (req, res, [id]) => send(res, 200, await removeCash(id))],
   ['GET', /^\/api\/watchlist$/, async (req, res) => send(res, 200, await getWatchlist())],
   ['POST', /^\/api\/watchlist$/, async (req, res) => {
     const body = await readBody(req);
@@ -186,14 +251,16 @@ const routes = [
   ['POST', /^\/api\/selfreview\/run$/, async (req, res) => send(res, 200, await runSelfReview({ apply: false }))],
   // Đồng bộ database ngay
   ['POST', /^\/api\/db\/sync$/, async (req, res) => send(res, 200, await syncAll())],
-  // Bản tin Telegram: xem trước (GET) hoặc gửi ngay (POST), ?kind=open|close
+  // Bản tin Telegram: xem trước (GET) hoặc gửi ngay (POST), ?kind=close|morning|weekly
   ['GET', /^\/api\/telegram\/preview$/, async (req, res) => {
-    const kind = new URL(req.url, 'http://localhost').searchParams.get('kind') === 'open' ? 'open' : 'close';
+    const k = new URL(req.url, 'http://localhost').searchParams.get('kind');
+    const kind = ['morning', 'weekly'].includes(k) ? k : 'close';
     send(res, 200, { kind, ...(await buildReport(kind)) });
   }],
   ['POST', /^\/api\/telegram\/send$/, async (req, res) => {
     if (!telegramConfig().enabled) return send(res, 400, { error: 'Chưa cấu hình TELEGRAM_BOT_TOKEN và TELEGRAM_CHAT_ID trong .env' });
-    const kind = new URL(req.url, 'http://localhost').searchParams.get('kind') === 'open' ? 'open' : 'close';
+    const k = new URL(req.url, 'http://localhost').searchParams.get('kind');
+    const kind = ['morning', 'weekly'].includes(k) ? k : 'close';
     send(res, 200, await sendReport(kind));
   }],
   ['POST', /^\/api\/alerts\/test$/, async (req, res) => {
@@ -207,7 +274,12 @@ async function serveStatic(req, res, pathname) {
   if (!file.startsWith(PUBLIC_DIR)) return send(res, 403, { error: 'Forbidden' });
   try {
     const data = await readFile(file);
-    res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': MIME[extname(file)] || 'application/octet-stream',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
     res.end(data);
   } catch {
     send(res, 404, { error: 'Không tìm thấy' });
@@ -249,7 +321,7 @@ server.listen(PORT, process.env.HOST || '127.0.0.1', () => {
   startSelfReview(telegramConfig().enabled ? sendMessage : null);
   // Bản tin Telegram sau ATO và sau đóng cửa mỗi ngày giao dịch
   console.log(startTelegramSchedule()
-    ? 'Telegram: BẬT — bản tin ~9:20 và ~15:10 các ngày giao dịch, kèm cảnh báo trong phiên'
+    ? 'Telegram: BẬT — lệnh cho phiên tới 15:10, nhắc lệnh 8:30 (khi có lệnh), tổng kết tuần thứ 6, cảnh báo khẩn mã đang giữ'
     : 'Telegram: TẮT (thêm TELEGRAM_BOT_TOKEN và TELEGRAM_CHAT_ID vào .env, xem `npm run telegram`)');
   // Trong phiên: chụp giá toàn rổ + thị trường vào database; sau 15:45: chẩn đoán lại các dự đoán
   if (startIntraday()) {
@@ -262,7 +334,9 @@ server.listen(PORT, process.env.HOST || '127.0.0.1', () => {
   if (startTelegramBot()) console.log('Bot Telegram: BẬT — nhắn "mua/bán MÃ SỐ_LƯỢNG GIÁ [NGÀY]" để ghi danh mục, "danh mục", "hoàn tác"');
   // Quét toàn bộ rổ trong phiên, báo ngay mã nhóm dẫn đầu vừa vào vùng mua (đã qua AI)
   startRadar();
-  console.log(`Radar cơ hội mua: BẬT — quét toàn rổ mỗi ${RADAR.minutes} phút (9:30–14:30), tối đa ${RADAR.maxDaily} tin/ngày`);
+  console.log(`Radar cơ hội mua: BẬT — quét toàn rổ mỗi ${RADAR.minutes} phút (9:30–14:30), lưu trong app${process.env.RADAR_TELEGRAM === '1' ? `, gửi Telegram tối đa ${RADAR.maxDaily} tin/ngày` : ' (Telegram tắt, bật bằng RADAR_TELEGRAM=1)'}`);
+  // Mã đang nắm giữ: báo ngay khi thủng / sát cắt lỗ, chạm chốt lời, giảm hoặc tăng mạnh trong phiên
+  if (startHoldWatch()) console.log(`Theo dõi danh mục: BẬT — mỗi ${HOLD_RULES.minutes} phút (9:15–14:50): dưới ngưỡng −15%, sát sàn, rủi ro rơi tự do; tối đa ${HOLD_RULES.maxDaily} tin/ngày`);
   // Tải trước bảng top cổ phiếu HOSE để lần mở trang đầu không phải chờ
   getMarketMovers('HOSE').catch(() => {});
   // Tính bảng xếp hạng ngay và mỗi 30 phút (đồng thời ghi top 8 vào nhật ký dự đoán)

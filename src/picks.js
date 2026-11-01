@@ -5,7 +5,9 @@
 import { liquidityCheck } from './screener.js';
 import { screenCriteria } from './data.js';
 
-export const JUNK_RULES = { minRoe: 0.05, maxDebtToEquity: 3, pennyPrice: 10, pennyMinRoe: 0.12 };
+// pinnedRange: biên độ (cao nhất − thấp nhất) 20 phiên dưới 2% giá = giá bị ghim (chào mua công khai, hoán đổi sáp nhập…),
+// mua vào không có dư địa lãi. Trên 135 mã × 1,5 năm chỉ NAF (8–10/2026) chạm ngưỡng này liên tục.
+export const JUNK_RULES = { minRoe: 0.05, maxDebtToEquity: 3, pennyPrice: 10, pennyMinRoe: 0.12, pinnedRange: 0.02, maxForeignSellRatio: -15 };
 export const SECTOR_TOP = 5;
 const FINANCIAL = /ngân hàng|chứng khoán|bảo hiểm|tài chính/i;
 
@@ -50,7 +52,26 @@ export function junkCheck(a) {
   }
   const bars = a.recentBars;
   if (bars?.length >= 20 && !liquidityCheck(bars, screenCriteria().minValue).pass) reasons.push('thanh khoản không đều');
+  const pin = pinnedNote(bars);
+  if (pin) reasons.push(pin);
+  // Khối ngoại xả ròng mạnh: bán ròng liên tục chiếm > 15% GTGD 20 phiên và 5 phiên gần nhất vẫn bán âm
+  const flow = a.technical?.flow;
+  if (flow?.ratio20 != null && flow.ratio20 <= R.maxForeignSellRatio && flow.net5 != null && flow.net5 < 0) {
+    reasons.push(`khối ngoại xả ròng mạnh (${flow.ratio20}% GTGD 20 phiên, ${Math.round(flow.net5 / 1e9)} tỷ/5 phiên)`);
+  }
+  // Rủi ro rơi tự do hoặc lao dốc mạnh
+  if (a.stockRisk?.isRisky && a.stockRisk.reasons?.length) {
+    reasons.push(`rủi ro cao: ${a.stockRisk.reasons[0]}`);
+  }
   return { junk: reasons.length > 0, reasons };
+}
+
+/** Lý do nếu giá bị ghim (biên độ 20 phiên < JUNK_RULES.pinnedRange), ngược lại null. */
+export function pinnedNote(bars) {
+  if (!(bars?.length >= 20)) return null;
+  const w = bars.slice(-20);
+  const range = (Math.max(...w.map((b) => b.high)) - Math.min(...w.map((b) => b.low))) / w.at(-1).close;
+  return range < JUNK_RULES.pinnedRange ? `giá bị ghim, đi ngang ${(range * 100).toFixed(1)}%/20 phiên — có thể đang chào mua/hoán đổi` : null;
 }
 
 // Lời kỳ vọng tối thiểu tới mức chốt: phí + thuế mua/bán ~0,35–0,4% và trượt giá, nên dưới 4% là không đáng vào lệnh

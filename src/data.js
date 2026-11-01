@@ -31,12 +31,63 @@ const PRICE_SOURCES = [
   },
 ];
 
+// Phiên khớp lệnh liên tục + ATC của HOSE theo giờ Việt Nam (phút trong ngày): 9:00–11:30 và 13:00–14:45
+const SESSIONS = [[540, 690], [780, 885]];
+const SESSION_MIN = SESSIONS.reduce((s, [a, b]) => s + b - a, 0);
+const SETTLE_MIN = 900; // sau 15:00 coi nến ngày đã chốt
+
+/**
+ * Kiểm tra xem hiện tại có đang trong phiên giao dịch của các sàn Việt Nam (HOSE/HNX) hay không.
+ * Giờ GD: Thứ 2 - Thứ 6, từ 9:00 - 11:35 và 13:00 - 15:05 (giờ Việt Nam GMT+7).
+ */
+export function isTradingSession(now = new Date()) {
+  const vn = new Date(now.getTime() + 7 * 3600_000);
+  const day = vn.getUTCDay();
+  if (day === 0 || day === 6) return false;
+  const m = vn.getUTCHours() * 60 + vn.getUTCMinutes();
+  return (m >= 540 && m <= 695) || (m >= 780 && m <= 905);
+}
+
+// TTL thông minh: trong giờ GD cập nhật nhanh (3–5 phút), ngoài giờ GD nến tĩnh không đổi nên cache 30–60 phút
+export const priceTTL = () => (isTradingSession() ? 3 * MIN : 30 * MIN);
+export const moversTTL = () => (isTradingSession() ? 5 * MIN : 30 * MIN);
+
+/**
+ * Tiến độ phiên hôm nay theo giờ Việt Nam: { date, progress 0..1, closed }. closed = đã qua 15:00 (nến ngày đã chốt).
+ */
+export function sessionProgress(now = new Date()) {
+  const vn = new Date(now.getTime() + 7 * 3600_000);
+  const m = vn.getUTCHours() * 60 + vn.getUTCMinutes();
+  const done = SESSIONS.reduce((s, [a, b]) => s + Math.max(0, Math.min(m, b) - a), 0);
+  return { date: vn.toISOString().slice(0, 10), progress: done / SESSION_MIN, closed: m >= SETTLE_MIN };
+}
+
+/**
+ * Đánh dấu nến cuối là nến TRONG PHIÊN (chưa chốt) nếu là ngày hôm nay và chưa qua 15:00: khối lượng mới là một phần
+ * của cả phiên, không được so trực tiếp với khối lượng các phiên trước. Gắn `partial: true` và `progress` (0..1).
+ */
+export function markPartial(bars, now = new Date()) {
+  const last = bars?.at(-1);
+  if (!last) return bars;
+  const s = sessionProgress(now);
+  if (last.time === s.date && !s.closed) {
+    last.partial = true;
+    last.progress = s.progress;
+  }
+  return bars;
+}
+
+/** Khối lượng cả phiên ước tính từ nến trong phiên (tuyến tính theo thời gian, sàn 25% để tránh phóng đại đầu phiên). */
+export function projectedVolume(bar) {
+  return bar.partial ? bar.volume / Math.max(0.25, bar.progress ?? 1) : bar.volume;
+}
+
 /**
  * Giá ngày (đơn vị nghìn đồng với cổ phiếu, điểm với chỉ số) của ~1,5 năm gần nhất.
  * Thử lần lượt các nguồn, nguồn đầu tiên trả dữ liệu hợp lệ sẽ được dùng.
  */
 export function getPriceHistory(symbol, days = 550) {
-  return cached(`price:${symbol}:${days}`, 2 * MIN, async () => {
+  return cached(`price:${symbol}:${days}`, priceTTL(), async () => {
     const to = Math.floor(Date.now() / 1000);
     const from = to - days * 86400;
     const errors = [];
@@ -47,7 +98,7 @@ export function getPriceHistory(symbol, days = 550) {
         // bỏ đi để không phân tích/chụp bằng giá phiên trước.
         const last = bars?.at(-1);
         if (bars?.length > 1 && !last.volume && last.high === last.low) bars.pop();
-        if (bars && bars.length) return { source: src.name, bars };
+        if (bars && bars.length) return { source: src.name, bars: markPartial(bars) };
         errors.push(`${src.name}: không có dữ liệu`);
       } catch (err) {
         errors.push(`${src.name}: ${err.message}`);
@@ -120,6 +171,14 @@ export function getForeignFlow(symbol, days = 20) {
 export const FLOORS = ['HOSE', 'HNX', 'UPCOM'];
 
 /**
+ * Mã hủy niêm yết (dùng khi backtest và khi chấm dự đoán): thoát ở giá đóng cửa cuối cùng trừ đi tỷ lệ này. Thận trọng
+ * vì ở Việt Nam mã bị hủy niêm yết bắt buộc thường mất thanh khoản và giảm sâu khi chuyển sang UPCoM.
+ */
+export const DELIST_HAIRCUT = 0.3;
+// Hết dữ liệu giá ít nhất bấy nhiêu phiên (và không giao dịch lại) mới coi là hủy niêm yết, tránh nhầm với nguồn trễ
+export const DELIST_GAP = 5;
+
+/**
  * Tiêu chí chọn cổ phiếu cho bộ lọc tiềm năng và bảng xếp hạng (đổi trong .env):
  *  SCREEN_FLOORS    sàn được xét, mặc định HOSE (vd "HOSE,HNX")
  *  SCREEN_MIN_VALUE giá trị khớp lệnh trung bình 20 phiên tối thiểu, mặc định 5 tỷ đồng
@@ -155,12 +214,27 @@ export function getScreenUniverse() {
 }
 
 /**
+ * Rổ ứng viên TẠI MỘT NGÀY trong quá khứ (sàn, khớp lệnh phiên đó ≥ 1/5 ngưỡng), dùng cho backtest để tránh thiên lệch
+ * sống sót: gồm cả mã sau này bị hủy niêm yết / chuyển sàn / cạn thanh khoản. Sàn trả về là sàn tại ngày đó.
+ * Ngày không có phiên (nghỉ lễ) trả mảng rỗng.
+ */
+export function getUniverseAt(date) {
+  const { floors, minValue } = screenCriteria();
+  return cached(`universe-at:${date}:${floors.join(',')}:${minValue}`, 24 * HOUR, async () => {
+    const lists = await Promise.all(floors.map((floor) => fetchJson(
+      `${FINFO}/stock_prices?q=date:${date}~floor:${floor}~type:STOCK~nmValue:gte:${Math.round(minValue / 5)}&size=1000&fields=code,floor`,
+    ).then((r) => r.data || [])));
+    return lists.flat().filter((d) => /^[A-Z0-9]{3}$/.test(d.code)).map((d) => ({ symbol: d.code, exchange: d.floor }));
+  });
+}
+
+/**
  * Top cổ phiếu của một sàn trong phiên gần nhất: tăng mạnh, giảm mạnh,
  * giá trị giao dịch lớn, khối ngoại mua ròng và bán ròng nhiều nhất.
  */
 export function getMarketMovers(floor = 'HOSE', size = 10) {
   if (!FLOORS.includes(floor)) throw new Error('Sàn không hợp lệ');
-  return cached(`movers:${floor}:${size}`, 2 * MIN, async () => {
+  return cached(`movers:${floor}:${size}`, moversTTL(), async () => {
     // Ngày giao dịch gần nhất: lấy từ VN-Index (các sàn dùng chung lịch giao dịch)
     const { bars } = await getPriceHistory('VNINDEX', 550);
     const date = bars.at(-1)?.time;
@@ -182,7 +256,7 @@ export function getMarketMovers(floor = 'HOSE', size = 10) {
       fetchJson(`${fBase}~netVal:gt:0&sort=netVal:desc&size=${size * 4}&fields=${fFields}`),
       fetchJson(`${fBase}~netVal:lt:0&sort=netVal:asc&size=${size * 4}&fields=${fFields}`),
       // Toàn sàn: độ rộng thị trường và tổng giao dịch khối ngoại
-      fetchJson(`${base}&size=3000&fields=pctChange,nmValue`),
+      fetchJson(`${base}&size=3000&fields=code,close,change,pctChange,nmValue`),
       fetchJson(`${fBase}&size=3000&fields=buyVal,sellVal,netVal`),
     ]);
     const sum = (arr, k) => arr.reduce((s, d) => s + (d[k] || 0), 0);
@@ -207,6 +281,66 @@ export function getMarketMovers(floor = 'HOSE', size = 10) {
     const foreign = (d) => ({
       ...stock(priceBy.get(d.code) || { code: d.code }), buyVal: d.buyVal, sellVal: d.sellVal, netVal: d.netVal, netVol: d.netVol,
     });
+
+    // Cổ phiếu ngày giao dịch có thể mua được: xét trọn bộ 4 yếu tố, trên MA200, an toàn rủi ro, thanh khoản đạt chuẩn
+    let buyable = [];
+    try {
+      const { getRankBoard } = await import('./ranking.js');
+      const board = await getRankBoard();
+      const allPrices = new Map(all.data.map((p) => [p.code, p]));
+
+      buyable = (board.rows || [])
+        .filter((r) => (!floor || r.exchange === floor) && r.aboveMa200 !== false && !r.avoid && (r.score >= 70 || r.trendPick))
+        .map((r) => {
+          const live = allPrices.get(r.symbol);
+          const close = live?.close ?? r.close;
+          const change = live?.change ?? 0;
+          const changePct = live?.pctChange ?? r.changePct ?? 0;
+          const val = live?.nmValue ?? r.value20 ?? 0;
+          const winProb = Math.min(88, Math.max(52, Math.round(50 + (r.score - 50) * 0.65 + (r.trendPick ? 6 : 0))));
+          return {
+            symbol: r.symbol,
+            close,
+            change,
+            changePct,
+            value: val,
+            score: r.score,
+            trendPick: Boolean(r.trendPick),
+            aboveMa200: r.aboveMa200,
+            trendState: r.trend?.trendState,
+            winProb,
+            action: r.trendPick ? '★ Siêu xu hướng' : r.score >= 85 ? 'Mua mạnh' : 'Có thể mua',
+          };
+        })
+        .sort((a, b) => {
+          if (a.trendPick !== b.trendPick) return b.trendPick ? 1 : -1;
+          return (b.score || 0) - (a.score || 0);
+        })
+        .slice(0, size);
+
+      // Ghi nhận vào sổ nhật ký dự đoán (prediction_log.jsonl) để tự động theo dõi và đối chiếu kết quả thực tế T+5, T+10, T+20
+      if (buyable.length) {
+        try {
+          const { recordMany } = await import('./predictions.js');
+          await recordMany(buyable.map((b) => ({
+            source: 'buyable',
+            symbol: b.symbol,
+            date,
+            direction: 1,
+            label: `${b.action}: Điểm ${b.score} (Win ${b.winProb}%)`,
+            price: b.close,
+            score: b.score,
+            confidence: b.winProb,
+            detail: `4 yếu tố ${b.score}/100, trên MA200, trendState ${b.trendState || 'UP'}, thanh khoản ${(b.value / 1e9).toFixed(1)} tỷ`,
+          })));
+        } catch {
+          // Bỏ qua nếu ghi sổ lỗi
+        }
+      }
+    } catch {
+      // Bỏ qua nếu bảng xếp hạng chưa sẵn sàng
+    }
+
     return {
       floor,
       date,
@@ -217,6 +351,7 @@ export function getMarketMovers(floor = 'HOSE', size = 10) {
       topValue: value.data.map(stock),
       foreignBuy: fBuy.data.map(foreign).filter((x) => x.value >= minValue).slice(0, size),
       foreignSell: fSell.data.map(foreign).filter((x) => x.value >= minValue).slice(0, size),
+      buyable,
       minValue,
     };
   });

@@ -28,6 +28,19 @@ test('Quyết định cuối: kế hoạch mua/bán tính lại theo mức đã 
   assert.match(f.note, /AI hạ từ NÊN MUA xuống CHƯA NÊN MUA \(yếu tố xấu: xu hướng vn-index\)/);
   assert.equal(f.steps.fresh[0].side, 'wait'); // không còn bước mua ngay
   assert.match(f.action, /Không mua mới/);
+
+  // Giá bị ghim (NAF 10/2026): hệ thống và AI cùng mua vẫn chỉ được GIỮ
+  const pinned = Array.from({ length: 20 }, () => ({ high: 48.1, low: 47.8, close: 48 }));
+  const g = finalDecision({ ...a, recentBars: pinned }, { ...ai, decision: 'MUA', marketChecks: [] });
+  assert.equal(g.code, 'HOLD');
+  assert.match(g.note, /bị ghim/);
+
+  // Phủ quyết toán học: Hệ thống và AI đều muốn MUA nhưng kỳ vọng toán học âm (EV <= 0) thì hạ xuống HOLD
+  const mathProb = { pass: false, reasons: ['Kỳ vọng toán học âm (EV = -5.4%): R/R bất lợi'] };
+  const h = finalDecision({ ...a, mathProb }, { ...ai, decision: 'MUA', marketChecks: [] });
+  assert.equal(h.code, 'HOLD');
+  assert.match(h.note, /Phủ quyết Toán học \(Mathematical Veto\)/);
+  assert.match(h.note, /Kỳ vọng toán học âm/);
 });
 
 test('Kế hoạch người đang nắm giữ: chặn mua thêm khi quyết định cuối không phải mua', async () => {
