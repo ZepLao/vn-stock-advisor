@@ -50,8 +50,16 @@ const MIN = 60_000;
  * còn lãi của v1 đến từ nhóm dẫn đầu xu hướng ở đỉnh. Vì vậy v2 KHÔNG thay bộ xếp hạng mua; chỉ chạy song song ('rank_v2')
  * để kiểm chứng tương lai, ứng viên dùng làm bộ lọc TRÁNH mã biến động cao.
  */
+/**
+ * Thử nghiệm 4 yếu tố + ROE 4 quý (quality.js runRoeTest, 7 năm theo thời điểm, 11/2026): IC 20 phiên 0,062 → 0,068 và danh
+ * mục top 8 +185% → +355%, tốt hơn ở cả hai nửa, NHƯNG chênh IC t 1,26 < 2 và chỉ hơn 44/88 kỳ → chưa đạt quy tắc đặt trước.
+ * Không thay bộ xếp hạng; chạy song song ('rank_roe', giả thuyết H6) để kiểm chứng bằng dữ liệu tương lai.
+ */
+export const ROE_FACTOR = { key: 'roe', label: 'ROE 4 quý', sign: 1 };
+
 export const MODELS = {
   v1: { label: '4 yếu tố (động lượng, gần đỉnh, biến động thấp, ADX)', factors: null, reader: null },
+  roe: { label: '4 yếu tố + ROE 4 quý (thử nghiệm)', factors: [...FACTORS, ROE_FACTOR], reader: null },
   v2: {
     label: 'Biến động thấp (ATR%, biến động 60 phiên, lãi ngày lớn nhất)',
     factors: [{ key: 'atr', label: 'ATR% thấp', sign: -1 }, { key: 'ivol', label: 'Biến động 60 phiên thấp', sign: -1 }, { key: 'maxret', label: 'Không có phiên tăng đột biến', sign: -1 }],
@@ -373,7 +381,8 @@ export async function runRankPortfolio(opts = {}) {
   const trendFilter = opts.trendFilter !== false && opts.trendFilter !== '0' && opts.trendFilter !== 'false';
   const regime = REGIMES.includes(opts.regime) ? opts.regime : DEFAULT_REGIME;
   const earnings = opts.earnings === true || opts.earnings === '1' || opts.earnings === 'true';
-  const model = MODELS[opts.model] && opts.model !== 'v1' ? opts.model : 'v1';
+  // Mô hình 'roe' cần BCTC theo thời điểm (chỉ có trong quality.js runRoeTest), không chạy được ở đây
+  const model = opts.model === 'v2' ? 'v2' : 'v1';
   const factors = model === 'v2' ? MODELS.v2.factors : earnings ? [...FACTORS, EARN_FACTOR] : FACTORS;
   const readerOf = model === 'v2' ? MODELS.v2.reader : factorReader;
   const initialCash = Number(opts.initialCash) > 0 ? Number(opts.initialCash) : DEFAULTS.initialCash;

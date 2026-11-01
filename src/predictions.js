@@ -21,6 +21,7 @@ export const HORIZONS = [5, 10, 20];
 export const SOURCES = {
   rank_all: 'Điểm xếp hạng — toàn bộ rổ (mỗi phiên)',
   rank_v2: 'Mô hình thử nghiệm v2 (biến động thấp) — toàn bộ rổ (mỗi phiên)',
+  rank_roe: 'Mô hình thử nghiệm 4 yếu tố + ROE — toàn bộ rổ (mỗi phiên)',
   legacy_all: 'Điểm kiểu cũ — toàn bộ rổ (mỗi phiên)',
   final: 'Quyết định cuối (hệ thống + AI thẩm định)',
   rule: 'Khuyến nghị hệ thống (mã đã xem)',

@@ -19,6 +19,7 @@ import { FACTORS, buildRef, compositeScore } from './ranking.js';
 import { DEFAULTS as BT, BANDS } from './backtest.js';
 import { testSeries } from './verify.js';
 import { loadPanel, EXPECT_STEP } from './expectancy.js';
+import { upsert, dbConfig } from './db.js';
 
 const FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'evaluation.json');
 
@@ -319,10 +320,13 @@ export function collectTrades(cal, data, { start, minValue, members = null, step
       if (exits.skip) continue;
       const score = compositeScore(x.f, ref, FACTORS)?.score ?? null;
       const ctx = { score, aboveMa200: x.f.aboveMa200, breadth, breakout: x.st.breakout, pullback: x.st.pullback };
+      // Cổ ngon theo BCTC đã công bố tại mốc (chỉ khi panel có bộ đọc quality.js; null = thiếu dữ liệu)
+      const q = x.d.quality ? x.d.quality(date) : null;
       trades.push({
         date, symbol: x.s, score, breadth: r4(breadth),
         rules: RULES.filter((rl) => rl.test(ctx)).map((rl) => rl.key),
         ...exits[BASE_EXIT.key], exits,
+        quality: q ? q.pass : null, checks: q?.checks ?? null,
       });
     }
   }
@@ -415,5 +419,10 @@ export async function runEvaluation({ years = 4 } = {}) {
   const rep = { ...buildReport(collected, panel.step), survivorshipBias: panel.survivorshipBias, builtAt: new Date().toISOString() };
   await mkdir(dirname(FILE), { recursive: true });
   await writeFile(FILE, JSON.stringify(rep), 'utf8');
+  // Lưu thêm vào database (nếu bật) để giữ mọi lần chạy; lỗi database không làm hỏng kết quả
+  if (dbConfig().enabled) {
+    await upsert('evaluation_runs', ['built_at', 'date_from', 'date_to', 'raw'], [[rep.builtAt, rep.from, rep.to, rep]], ['built_at'], { update: false })
+      .catch((err) => console.error('[DB] Không lưu được kết quả bộ đo:', err.message));
+  }
   return rep;
 }

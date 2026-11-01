@@ -96,3 +96,23 @@ test('H5: mô hình v2 sắp thứ tự tốt hơn v1 trên cùng phiên thì �
   const same = scored.map((x) => (x.source === 'rank_v2' ? { ...x, score: scored.find((y) => y.source === 'rank_all' && y.symbol === x.symbol && y.date === x.date).score } : x));
   assert.notEqual(verifyFromScored(same).hypotheses.find((h) => h.id === 'H5').verdict, 'supported');
 });
+
+test('H6: điểm +ROE sắp thứ tự tốt hơn điểm 4 yếu tố (IC 20 phiên) thì ủng hộ; như nhau thì không', () => {
+  const r = rng(17);
+  const scored = [];
+  for (let d = 0; d < 60; d++) {
+    for (let k = 0; k < 30; k++) {
+      const roe = r() * 100, noise = r() * 100;
+      const ex = 0.0008 * (roe - 50) + (r() - 0.5) * 0.08;
+      const res = { 5: { excessBasket: ex }, 10: { excessBasket: ex }, 20: { excessBasket: ex } };
+      scored.push({ source: 'rank_all', symbol: `S${k}`, date: day(d), score: Math.round(noise), direction: 0, result: res });
+      scored.push({ source: 'rank_roe', symbol: `S${k}`, date: day(d), score: Math.round(roe), direction: 0, result: res });
+    }
+  }
+  const h6 = verifyFromScored(scored).hypotheses.find((h) => h.id === 'H6');
+  assert.equal(h6.h, 20);
+  assert.equal(h6.verdict, 'supported');
+  assert.ok(h6.icRoe > 0.1);
+  const same = scored.map((x) => (x.source === 'rank_roe' ? { ...x, score: scored.find((y) => y.source === 'rank_all' && y.symbol === x.symbol && y.date === x.date).score } : x));
+  assert.notEqual(verifyFromScored(same).hypotheses.find((h) => h.id === 'H6').verdict, 'supported');
+});

@@ -446,3 +446,51 @@ CREATE TABLE IF NOT EXISTS diagnostics (
 );
 
 ALTER TABLE news_labels ADD COLUMN IF NOT EXISTS published_at timestamptz;
+
+-- ===== Lịch sử dài cho nghiên cứu (nạp bằng `npm run db-backfill`, chạy lại an toàn) =====
+
+-- Rổ cổ phiếu tại từng thời điểm (mỗi tháng một mốc), gồm cả mã sau này hủy niêm yết: tránh thiên lệch sống sót
+CREATE TABLE IF NOT EXISTS universe_snapshots (
+  date      date,
+  symbol    text,
+  exchange  text,
+  PRIMARY KEY (date, symbol)
+);
+
+-- BCTC theo quý. available_date = ngày cuối quý + 45 ngày (hạn công bố): chỉ được dùng dữ liệu quý từ ngày này
+-- trở đi khi kiểm định, để không nhìn trước tương lai. Đơn vị: đồng.
+CREATE TABLE IF NOT EXISTS quarterly_financials (
+  symbol          text,
+  fiscal_date     date,
+  available_date  date,
+  bank            boolean,
+  revenue         numeric,
+  gross_profit    numeric,
+  profit          numeric,
+  cfo             numeric,
+  equity          numeric,
+  assets          numeric,
+  net_interest    numeric,
+  provision       numeric,
+  PRIMARY KEY (symbol, fiscal_date)
+);
+CREATE INDEX IF NOT EXISTS quarterly_financials_available ON quarterly_financials (available_date);
+
+-- Khối ngoại mua/bán theo ngày từng mã (đồng)
+CREATE TABLE IF NOT EXISTS foreign_daily (
+  symbol    text,
+  date      date,
+  buy_val   numeric,
+  sell_val  numeric,
+  net_val   numeric,
+  net_vol   numeric,
+  PRIMARY KEY (symbol, date)
+);
+
+-- Kết quả bộ đo 3 rào (npm run evaluate), mỗi lần chạy một dòng
+CREATE TABLE IF NOT EXISTS evaluation_runs (
+  built_at  timestamptz PRIMARY KEY,
+  date_from date,
+  date_to   date,
+  raw       jsonb
+);

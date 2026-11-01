@@ -21,7 +21,7 @@ export const VERIFY_RULES = {
   minCross: 20,     // số mã tối thiểu mỗi phiên để tính IC
   bandTarget: 0.9,  // độ phủ mong muốn của dải 5–95%
   // Hiệu ứng giả định (để ước tính còn bao lâu nếu hiệu ứng thật cỡ này)
-  prior: { H1: 0.04, H2: 0.008, H3: 0.03, H4: 0.005, H5: 0.02 },
+  prior: { H1: 0.04, H2: 0.008, H3: 0.03, H4: 0.005, H5: 0.02, H6: 0.006 }, // H6: mức chênh IC đo được 7 năm
 };
 
 const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
@@ -165,6 +165,14 @@ export function verifyFromScored(scored, R = VERIFY_RULES) {
   const h5 = testSeries(diff, 4, R.prior.H5, R);
   hyp.push({ id: 'H5', title: 'Mô hình v2 (biến động thấp) sắp thứ tự tốt hơn v1 (chênh IC 5 phiên)', metric: 'IC v2 − IC v1', h: 5, ...h5,
     icV2: r4(mean(ic2.map((x) => x.ic))), note: h5.verdict === 'supported' ? 'có thể dùng v2 làm bộ lọc tránh mã biến động cao (không thay bộ xếp hạng mua)' : null });
+
+  // H6: 4 yếu tố + ROE so với 4 yếu tố, chênh IC 20 phiên trên cùng phiên (cùng thước đo với nghiên cứu quality.js)
+  const ic1b = new Map(dailyIc(rankAll, 20, R).map((x) => [x.date, x.ic]));
+  const icRoe = dailyIc(src('rank_roe'), 20, R);
+  const diffRoe = icRoe.filter((x) => ic1b.has(x.date)).map((x) => x.ic - ic1b.get(x.date));
+  const h6 = testSeries(diffRoe, 19, R.prior.H6, R);
+  hyp.push({ id: 'H6', title: 'Thêm ROE vào điểm xếp hạng sắp thứ tự tốt hơn (chênh IC 20 phiên)', metric: 'IC +ROE − IC 4 yếu tố', h: 20, ...h6,
+    icRoe: r4(mean(icRoe.map((x) => x.ic))), note: h6.verdict === 'supported' ? 'đủ căn cứ đưa ROE vào điểm xếp hạng' : null });
 
   // Độ tự tin AI: tỷ lệ đúng so rổ theo nhóm độ tự tin (mốc 10 phiên)
   const calib = ['ai', 'committee', 'final'].map((s) => {

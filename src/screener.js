@@ -432,13 +432,21 @@ async function run() {
   }
   state.progress = { stage: 2, label: 'Phân tích sâu nhóm dẫn đầu (kèm tin tức)', done: 0, total: shortlist.length };
   let marketFlow = null;
+  // Mã bị loại ở bước phân tích sâu kèm lý do (để giao diện giải thích khi không còn mã nào)
+  const deepRejected = [];
+  const reject = (a, reason) => { deepRejected.push({ symbol: a.symbol, close: a.price?.close ?? null, recommendation: a.recommendation?.label ?? null, reason }); return null; };
   const detailed = await pool(shortlist, async (c) => {
     const a = await analyzeSymbol(c.symbol, { withChart: false });
     marketFlow ??= a.marketFlow;
-    if (a.recommendation.code === 'SELL' || a.recommendation.code === 'AVOID') return null;
-    if (a.recommendation.code === 'HOLD' && (a.mathProb && !a.mathProb.pass)) return null;
-    if (a.recommendation.code === 'HOLD' && (a.isOverextended || a.hasBearishDivergence || a.nearResistance || a.isForeignDumping || a.buyWarnings?.length)) return null;
-    if (a.warnings.some((w) => RISK_WARNING.test(w))) return null;
+    if (a.recommendation.code === 'SELL' || a.recommendation.code === 'AVOID') return reject(a, `Khuyến nghị hệ thống: ${a.recommendation.label}`);
+    if (a.recommendation.code === 'HOLD' && (a.mathProb && !a.mathProb.pass)) return reject(a, 'Kỳ vọng thống kê không đạt (xác suất / EV)');
+    if (a.recommendation.code === 'HOLD' && (a.isOverextended || a.hasBearishDivergence || a.nearResistance || a.isForeignDumping || a.buyWarnings?.length)) {
+      const why = [a.isOverextended && 'giá đã chạy xa', a.hasBearishDivergence && 'phân kỳ giảm', a.nearResistance && 'sát kháng cự',
+        a.isForeignDumping && 'khối ngoại bán mạnh', a.buyWarnings?.length && 'cảnh báo khoan mua'].filter(Boolean);
+      return reject(a, `Theo dõi, chưa mua: ${why.join(', ')}`);
+    }
+    const risk = a.warnings.find((w) => RISK_WARNING.test(w));
+    if (risk) return reject(a, risk);
     return {
       symbol: a.symbol, name: a.info.name, exchange: a.info.exchange,
       close: a.price.close, changePct: a.price.changePct, date: a.price.date,
@@ -463,6 +471,9 @@ async function run() {
     };
   }, () => state.progress.done++);
 
+  for (const c of detailed) {
+    if (!c.quality.pass) deepRejected.push({ symbol: c.symbol, close: c.close, recommendation: c.recommendation?.label ?? null, reason: 'BCTC mới nhất không còn đạt tiêu chí cổ ngon' });
+  }
   const final = detailed
     .filter((c) => c.quality.pass)
     .map((c) => ({ ...c, isCounterTrend, isDeepDipMode }))
@@ -500,6 +511,7 @@ async function run() {
     universe: uni.length, scanned: scanned.length, shortlisted: shortlist.length,
     market, marketFlow, setupCounts, candidates: final, ai,
     isCounterTrend, isDeepDipMode, regimeNote,
+    deepRejected,
   };
 }
 

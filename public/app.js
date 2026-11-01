@@ -1844,7 +1844,8 @@ function renderPicks(s) {
   renderPickSummary(kept);
   renderSectorPicks(r);
   $('pk-list').innerHTML = kept.length ? kept.map((x, i) => pickCard(x.c, x.p, i + 1)).join('')
-    : '<div class="card pk-empty">Gemini không chọn mã nào đáng mua lúc này. Xem danh sách đã loại bên dưới.</div>';
+    : r.candidates.length ? '<div class="card pk-empty">Gemini không chọn mã nào đáng mua lúc này. Xem danh sách đã loại bên dưới.</div>'
+    : noPicksCard(r);
 
   $('pk-rejected').hidden = !rejected.length;
   $('pk-rejected-count').textContent = `(${rejected.length} mã)`;
@@ -1855,6 +1856,42 @@ function renderPicks(s) {
       <button type="button" class="btn btn-glass btn-xs" data-sym="${esc(c.symbol)}">Xem</button>
     </div>`).join('');
 }
+
+// Không có mã nào qua bộ lọc: nói rõ bị loại ở bước nào và vì sao (Gemini chưa được chạy trong trường hợp này)
+function noPicksCard(r) {
+  const fn = r.funnel || {};
+  const steps = [
+    ['liquidity', `thanh khoản đều ≥ 5 tỷ/ngày`],
+    ['quality', 'cơ bản tốt (có lãi, ROE ≥ 12%, nợ thấp…)'],
+    ['sector', 'thuộc ngành đang được mua ròng'],
+    ['trend', 'xu hướng mạnh (điểm ≥ 70, trên MA200, không cảnh báo rủi ro)'],
+  ];
+  const k = steps.findIndex(([key]) => fn[key] === 0);
+  const prev = k > 0 ? fn[steps[k - 1][0]] : r.scanned;
+  const where = k >= 0
+    ? `Có ${prev} mã qua bước trước nhưng <b>không mã nào ${steps[k][1]}</b>.`
+    : 'Không mã nào qua đủ các bước lọc.';
+  const sectorHint = k >= 0 && steps[k][0] === 'sector'
+    ? ' Dòng tiền 5 phiên đang rút khỏi các ngành lớn; các ngành còn được mua ròng hầu như không có mã đạt chuẩn cơ bản và thanh khoản.' : '';
+  const rej = r.deepRejected || [];
+  const mode = r.isCounterTrend ? 'chế độ cổ phiếu ngược dòng' : r.isDeepDipMode ? 'chế độ gom hàng giá trị' : null;
+  return `<section class="card pk-empty pk-none">
+    <h3>Hôm nay không có mã nào đủ điều kiện mua mới</h3>
+    <p>${where}${sectorHint}</p>
+    ${mode ? `<p>Hệ thống đã thử ${esc(mode)} và phân tích sâu ${r.shortlisted} mã, nhưng ${rej.length ? 'đều bị loại' : 'không mã nào đạt'}:</p>` : ''}
+    ${rej.length ? `<ul class="pk-none-list">${rej.map((x) => `<li><a href="#${esc(x.symbol)}" class="pf-sym" data-sym="${esc(x.symbol)}"><b>${esc(x.symbol)}</b></a> <span class="muted">${esc(x.reason)}</span></li>`).join('')}</ul>` : ''}
+    <p class="muted small">Đứng ngoài khi không có tín hiệu cũng là một quyết định: bộ đo 4 năm cho thấy mua trong pha thị trường yếu cho kết quả kém hơn rõ rệt. Các mã điểm cao vẫn được theo dõi trong Bảng quét để vào khi điều kiện đủ.</p>
+    <div class="picks-actions"><button type="button" class="btn btn-secondary btn-sm" id="pk-open-scan">Xem Bảng quét · Điểm cao</button></div>
+  </section>`;
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#pk-open-scan')) {
+    if (window.matchMedia('(max-width: 1023px)').matches) setMobileTab('watchlist');
+    $('side-tab-scan')?.click();
+    document.querySelector('.btn-scan-pill[data-flt="TOP10"]')?.click();
+  }
+});
 
 // Hành động ngay theo kết luận của Gemini và vị trí giá so với vùng mua
 const PICK_ACTION = {
@@ -3398,7 +3435,7 @@ const VERDICT = {
 };
 function verificationHtml(v) {
   if (!v?.hypotheses) return '';
-  const val = (h) => (h.mean == null ? '–' : h.id === 'H1' || h.id === 'H5' ? fmt(h.mean, 3) : h.id === 'H3' ? `${fmt(h.coverage * 100, 0)}% phủ` : pct(h.mean));
+  const val = (h) => (h.mean == null ? '–' : h.id === 'H1' || h.id === 'H5' || h.id === 'H6' ? fmt(h.mean, 3) : h.id === 'H3' ? `${fmt(h.coverage * 100, 0)}% phủ` : pct(h.mean));
   const remain = (h) => {
     if (h.verdict === 'supported' || h.verdict === 'rejected') return '–';
     const need = h.needDatesPrior ?? h.needDates;

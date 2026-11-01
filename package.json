@@ -12,7 +12,9 @@
     "telegram": "node telegram-setup.js",
     "db-sync": "node db-sync.js",
     "self-review": "node self-review.js",
-    "evaluate": "node evaluate.js"
+    "evaluate": "node evaluate.js",
+    "db-backfill": "node db-backfill.js",
+    "research-quality": "node research-quality.js"
   },
   "engines": {
     "node": ">=20"
