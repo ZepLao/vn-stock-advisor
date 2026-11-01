@@ -137,38 +137,24 @@ export function chandelierExit(bars, period = 22, mult = 2.5) {
 }
 
 /**
- * Kế hoạch chốt lời đa tầng & Chặn lãi động (Trailing Stop & Profit Lock)
+ * Kế hoạch cho người đang giữ theo HOLD_RULE (luật đo tốt nhất trong bộ đo evaluation.js, 4 năm): KHÔNG chốt lời theo
+ * mốc cố định, KHÔNG dời cắt lỗ về hòa vốn, KHÔNG cắt lỗ đuổi — so với luật này, cả ba đều làm lãi mỗi lệnh giảm.
+ * Chỉ có một ngưỡng cảnh báo xa (−wideStop giá vốn, xét theo giá ĐÓNG CỬA) và mốc xem lại sau `sessions` phiên.
+ * @param {{ entryPrice: number, currentPrice?: number, heldSessions?: number }} o
  */
-export function buildDynamicTrailingPlan(bars, { entryPrice, currentPrice = null, pnlPct = null, baseStop = null } = {}) {
-  const cur = currentPrice ?? bars.at(-1)?.close ?? entryPrice;
-  const pnl = pnlPct ?? (entryPrice ? (cur - entryPrice) / entryPrice : 0);
-  const chan = chandelierExit(bars, 22, 2.5);
-  const cStop = chan ? down(chan) : null;
-
-  // Dời Stop Loss về hòa vốn khi lãi ≥ 6%
-  const breakevenStop = pnl >= 0.06 && entryPrice ? down(entryPrice * 1.005) : null;
-
-  // Điểm chặn lãi hiệu lực cao nhất
-  const effectiveStop = Math.max(
-    baseStop ?? 0,
-    breakevenStop ?? 0,
-    (pnl >= 0.1 && cStop) ? cStop : 0
-  );
-
+export function holdPlan({ entryPrice, currentPrice = null, heldSessions = null } = {}, R = HOLD_RULE) {
+  if (!entryPrice) return null;
+  const cur = currentPrice ?? entryPrice;
+  const warnStop = down(entryPrice * (1 - R.wideStop));
   return {
     entryPrice,
     currentPrice: cur,
-    pnlPct: Math.round(pnl * 1000) / 10,
-    breakevenStop,
-    chandelierStop: cStop,
-    effectiveStop: effectiveStop > 0 ? down(effectiveStop) : null,
-    isBreakevenActive: breakevenStop != null,
-    isChandelierActive: pnl >= 0.1 && cStop != null,
-    stages: {
-      tp1: entryPrice ? up(entryPrice * 1.07) : null, // Chốt 1/3 vị thế, dời stop hòa vốn
-      tp2: entryPrice ? up(entryPrice * 1.15) : null, // Chốt 1/3 vị thế tiếp theo
-      tp3Trailing: cStop, // Gồng 1/3 còn lại theo Chandelier
-    },
+    pnlPct: Math.round(((cur - entryPrice) / entryPrice) * 1000) / 10,
+    warnStop,
+    belowWarn: cur < warnStop,
+    reviewAfter: R.sessions,
+    reviewDue: heldSessions != null && heldSessions >= R.sessions,
+    label: `Cảnh báo khi đóng cửa dưới ${fmt(warnStop)} (−${Math.round(R.wideStop * 100)}% giá vốn), giữ ${R.sessions} phiên rồi xem lại; không chốt lời theo mốc cố định`,
   };
 }
 
@@ -216,8 +202,9 @@ export function tradeSteps(code, L, ctx = {}) {
     const half = code === 'ACCUMULATE';
     fresh.push({ side: 'buy', price: L.close, portion: half ? W / 2 : W,
       condition: `Lệnh LO giá ${fmt(L.close)} (đóng cửa gần nhất) cho phiên tới${half ? ', nửa suất (mua thăm dò)' : ''}; không khớp thì xét lại phiên sau, không đuổi giá` });
-    fresh.push({ side: 'stop', price: L.stop, condition: `Cảnh báo nếu đóng cửa dưới ${fmt(L.stop)} (−${Math.round(HOLD_RULE.wideStop * 100)}% giá mua): xem lại lý do nắm giữ` });
-    fresh.push({ side: 'wait', condition: `Giữ khoảng ${N} phiên rồi xem lại: còn trong nhóm mua thì giữ tiếp, không thì bán` });
+    fresh.push({ side: 'wait', condition: 'Lưu ý kẹt hàng T+2: Cổ phiếu chưa về trong T+0 và T+1 (khóa vị thế). Tuyệt đối không bình quân giá xuống khi giá giảm trong thời gian chờ.' });
+    fresh.push({ side: 'stop', price: L.stop, condition: `Cảnh báo nếu đóng cửa dưới ${fmt(L.stop)} (−${Math.round(HOLD_RULE.wideStop * 100)}% giá mua): xem lại lý do nắm giữ khi hàng về (chiều T+2 hoặc mở cửa T+3)` });
+    fresh.push({ side: 'wait', condition: `Giữ khoảng ${N} phiên rồi xem lại: còn trong nhóm mua thì giữ tiếp, không thì bán. Không chốt lời sớm theo mốc %, không dời cắt lỗ sát khi đang lãi` });
   } else {
     const miss = [];
     if (ctx.avoid) miss.push('ra khỏi nhóm ⛔ (10% thấp nhất)');

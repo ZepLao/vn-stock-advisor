@@ -71,6 +71,10 @@ test('Khuyến nghị theo điểm xếp hạng và bộ lọc chặn', async ()
   assert.equal(rankRecommendation(r(80), { flagged: true }).code, 'HOLD');
   assert.equal(rankRecommendation(r(80), { losing: true }).code, 'HOLD');
   assert.equal(rankRecommendation(r(80), { liquid: false }).code, 'ACCUMULATE');
+  assert.equal(rankRecommendation(r(80), { overextended: true }).code, 'HOLD');
+  assert.equal(rankRecommendation(r(80), { foreignDumping: true }).code, 'HOLD');
+  assert.equal(rankRecommendation(r(80), { bearishDivergence: true }).code, 'HOLD');
+  assert.equal(rankRecommendation(r(80), { nearResistance: true }).code, 'HOLD');
   assert.equal(rankRecommendation(r(50)).code, 'HOLD');
   assert.equal(rankRecommendation(r(20)).code, 'AVOID');
   assert.equal(rankRecommendation(r(20), { flagged: true }).code, 'SELL');

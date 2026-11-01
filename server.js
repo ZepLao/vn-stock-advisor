@@ -11,7 +11,7 @@ import { getMarketMovers, screenCriteria } from './src/data.js';
 import { getScreener, startScreener, rerunScreenerAi, startScreenerSchedule } from './src/screener.js';
 import { runBacktest, listStrategies } from './src/backtest.js';
 import { startCommittee, getCommittee } from './src/committee.js';
-import { getPortfolio, addTransaction, removeTransaction } from './src/portfolio.js';
+import { getPortfolio, addTransaction, removeTransaction, removeSymbol, addCash, removeCash } from './src/portfolio.js';
 import { getRankBoard, runRankPortfolio } from './src/ranking.js';
 import { runLiveBacktest } from './src/livebacktest.js';
 import { runRollingPortfolio } from './src/rolling.js';
@@ -41,6 +41,13 @@ import {
 const PORT = Number(process.env.PORT) || 3000;
 const SCAN_MINUTES = Number(process.env.SCAN_MINUTES) || 10;
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), 'public');
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Process] Unhandled Rejection:', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught Exception:', err?.message || err);
+});
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -145,6 +152,17 @@ const routes = [
     const items = (board.rows || []).filter((r) => r.trend?.trendState === 'DOWN' && r.factors?.high <= -0.30);
     send(res, 200, { date: board.date, count: items.length, items });
   }],
+  // Metadata tên và ngành 2.000+ mã chứng khoán Việt Nam
+  ['GET', /^\/api\/stock-names$/, async (req, res) => {
+    try {
+      const file = join(dirname(fileURLToPath(import.meta.url)), 'data', 'stock_names.json');
+      const content = await readFile(file, 'utf8');
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
+      res.end(content);
+    } catch {
+      send(res, 200, {});
+    }
+  }],
   // Chế độ thị trường: Đếm ngày phân phối, độ rộng thị trường & kiểm soát tỷ trọng
   ['GET', /^\/api\/market-regime$/, async (req, res) => send(res, 200, await getMarketRegime())],
   ['GET', /^\/api\/rank\/backtest$/, async (req, res) => {
@@ -180,6 +198,22 @@ const routes = [
     }
   }],
   ['DELETE', /^\/api\/portfolio\/tx\/([^/]+)$/, async (req, res, [id]) => send(res, 200, await removeTransaction(id))],
+  ['DELETE', /^\/api\/portfolio\/symbol\/([^/]+)$/, async (req, res, [sym]) => {
+    try {
+      send(res, 200, await removeSymbol(sym));
+    } catch (err) {
+      send(res, 400, { error: err.message });
+    }
+  }],
+  // Quản lý vốn: nạp / rút / cổ tức tiền / đặt số dư
+  ['POST', /^\/api\/portfolio\/cash$/, async (req, res) => {
+    try {
+      send(res, 200, await addCash(await readBody(req)));
+    } catch (err) {
+      send(res, 400, { error: err.message });
+    }
+  }],
+  ['DELETE', /^\/api\/portfolio\/cash\/([^/]+)$/, async (req, res, [id]) => send(res, 200, await removeCash(id))],
   ['GET', /^\/api\/watchlist$/, async (req, res) => send(res, 200, await getWatchlist())],
   ['POST', /^\/api\/watchlist$/, async (req, res) => {
     const body = await readBody(req);

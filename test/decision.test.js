@@ -34,6 +34,13 @@ test('Quyết định cuối: kế hoạch mua/bán tính lại theo mức đã 
   const g = finalDecision({ ...a, recentBars: pinned }, { ...ai, decision: 'MUA', marketChecks: [] });
   assert.equal(g.code, 'HOLD');
   assert.match(g.note, /bị ghim/);
+
+  // Phủ quyết toán học: Hệ thống và AI đều muốn MUA nhưng kỳ vọng toán học âm (EV <= 0) thì hạ xuống HOLD
+  const mathProb = { pass: false, reasons: ['Kỳ vọng toán học âm (EV = -5.4%): R/R bất lợi'] };
+  const h = finalDecision({ ...a, mathProb }, { ...ai, decision: 'MUA', marketChecks: [] });
+  assert.equal(h.code, 'HOLD');
+  assert.match(h.note, /Phủ quyết Toán học \(Mathematical Veto\)/);
+  assert.match(h.note, /Kỳ vọng toán học âm/);
 });
 
 test('Kế hoạch người đang nắm giữ: chặn mua thêm khi quyết định cuối không phải mua', async () => {

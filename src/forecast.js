@@ -30,14 +30,15 @@ function quantile(sorted, q) {
   return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
 }
 
-/** Lợi suất log h phiên (đã bỏ trôi trung bình, nới theo hệ số widen) trong cửa sổ [from, to] của chuỗi giá đóng cửa. */
-function hReturns(closes, h, from, to) {
+/** Lợi suất log h phiên (đã bỏ trôi trung bình quá khứ, cộng độ trôi có điều kiện dailyDrift, nới theo hệ số widen) trong cửa sổ [from, to] của chuỗi giá đóng cửa. */
+function hReturns(closes, h, from, to, dailyDrift = 0) {
   const out = [];
   for (let i = Math.max(0, from); i + h <= to; i++) out.push(Math.log(closes[i + h] / closes[i]));
   if (!out.length) return out;
   const mean = out.reduce((a, b) => a + b, 0) / out.length;
   const k = widen();
-  return out.map((x) => (x - mean) * k).sort((a, b) => a - b);
+  const driftH = dailyDrift * h;
+  return out.map((x) => (x - mean) * k + driftH).sort((a, b) => a - b);
 }
 
 /** Các phiên giao dịch tiếp theo (thứ 2 – thứ 6; chưa trừ ngày lễ). */
@@ -54,18 +55,18 @@ export function futureDates(lastDate, n) {
 
 /**
  * Dải giá cho từng phiên 1..H tính từ phiên cuối.
- * @returns {{ h: number, date: string, p05: number, p25: number, p50: number, p75: number, p95: number, probUp: number }[]}
+ * @returns {{ h: number, date: string, p05: number, p25: number, p50: number, p75: number, p95: number, probProfit: number }[]}
  */
-export function priceCone(bars, H, { lookback = LOOKBACK } = {}) {
+export function priceCone(bars, H, { lookback = LOOKBACK, dailyDrift = 0 } = {}) {
   const closes = bars.map((b) => b.close);
   const end = closes.length - 1, close = closes[end];
   const dates = futureDates(bars.at(-1).time, H);
   const out = [];
   for (let h = 1; h <= H; h++) {
-    const r = hReturns(closes, h, end - lookback, end);
+    const r = hReturns(closes, h, end - lookback, end, dailyDrift);
     if (r.length < 30) break;
     const [p05, p25, p50, p75, p95] = QUANTILES.map((q) => round(close * Math.exp(quantile(r, q))));
-    // Xác suất giá sau h phiên đủ bù phí + thuế khứ hồi (nếu không có xu hướng)
+    // Xác suất giá sau h phiên đủ bù phí + thuế khứ hồi
     const be = Math.log(1 + roundTrip());
     out.push({ h, date: dates[h - 1], p05, p25, p50, p75, p95, probProfit: round(r.filter((x) => x > be).length / r.length, 3) });
   }
@@ -73,9 +74,9 @@ export function priceCone(bars, H, { lookback = LOOKBACK } = {}) {
 }
 
 /** Tóm tắt dải ở một số mốc (dùng trong prompt AI). */
-export function coneSummary(bars, horizons = AI_HORIZONS) {
+export function coneSummary(bars, horizons = AI_HORIZONS, { dailyDrift = 0 } = {}) {
   const H = Math.max(...horizons);
-  const cone = priceCone(bars, H);
+  const cone = priceCone(bars, H, { dailyDrift });
   return horizons.map((h) => cone.find((c) => c.h === h)).filter(Boolean);
 }
 
@@ -122,12 +123,23 @@ function seedOf(bars) {
 /**
  * Mô phỏng Monte Carlo (bootstrap đường giá theo phân phối biến động thực tế của mã,
  * tuân thủ biên độ trần/sàn Việt Nam, tham khảo phương pháp Laban).
- * Đã BỎ TRÔI TRUNG BÌNH (như dải thống kê): mô phỏng chỉ đo biên độ và rủi ro đuôi, không ngoại suy xu hướng quá khứ
- * thành xác suất tăng (nếu không, mã vừa tăng mạnh tự động có probUp cao — tức là đếm lại động lượng lần hai).
- * Lấy mẫu theo khối liên tiếp `block` phiên để giữ hiện tượng biến động co cụm.
+ * Tích hợp Bayesian & Regime-Conditioned Drift: kết hợp quán tính xu hướng (trend), bối cảnh
+ * thị trường chung (market beta drag) và dòng tiền khối ngoại để ước tính xác suất tăng/giảm chân thực,
+ * tránh rơi vào bẫy xác suất 50/50 của mô hình random walk giả định zero drift thuần túy.
+ * Lấy mẫu theo khối liên tiếp `block` phiên để giữ hiện tượng biến động co cụm (volatility clustering).
  * Trả về phân phối: prob_up, prob_gain5, prob_loss7, tỷ lệ R/R, và tín hiệu rủi ro.
  */
-export function monteCarloForecast(bars, H = 20, numPaths = 1000, { exchange = 'HOSE', isRisky = false, block = 5, seed = null } = {}) {
+export function monteCarloForecast(bars, H = 20, numPaths = 1000, {
+  exchange = 'HOSE',
+  isRisky = false,
+  block = 5,
+  seed = null,
+  trendState = null,
+  marketTrend = null,
+  score = null,
+  foreignRatio20 = null,
+  atrRatio = null,
+} = {}) {
   if (!bars || bars.length < 30) return null;
   const n = bars.length;
   const lastBar = bars[n - 1];
@@ -149,9 +161,40 @@ export function monteCarloForecast(bars, H = 20, numPaths = 1000, { exchange = '
   }
 
   if (sampleSteps.length < 20) return null;
-  // Bỏ trôi: chia mọi tỷ lệ cho exp(trung bình log lợi suất đóng cửa)
+  // Bỏ trôi lịch sử cũ: chuẩn hóa về trung bình log lợi suất = 0
   const drift = Math.exp(sampleSteps.reduce((s, x) => s + Math.log(x.cRatio), 0) / sampleSteps.length);
   for (const x of sampleSteps) { x.oRatio /= drift; x.hRatio /= drift; x.lRatio /= drift; x.cRatio /= drift; }
+
+  // Tính độ trôi có điều kiện theo trạng thái (Bayesian & Regime-conditioned Drift)
+  let dailyDrift = 0;
+  if (trendState || marketTrend || score != null || foreignRatio20 != null) {
+    // 1. Quán tính xu hướng của cổ phiếu
+    if (trendState === 'UP' || (score != null && score >= 75)) dailyDrift += 0.0010; // ~ +2.0% / 20 phiên
+    else if (trendState === 'DOWN' || (score != null && score < 40)) dailyDrift -= 0.0012; // ~ -2.4% / 20 phiên
+
+    // 2. Sức cản / trợ lực từ thị trường chung (Market Beta Drag)
+    if (marketTrend === 'down') dailyDrift -= 0.0006; // Áp lực thị trường giảm ~1.2%
+    else if (marketTrend === 'up') dailyDrift += 0.0004;
+
+    // 3. Dòng tiền khối ngoại gom / xả ròng
+    if (foreignRatio20 != null) {
+      if (foreignRatio20 >= 10) dailyDrift += 0.0004;
+      else if (foreignRatio20 <= -10) dailyDrift -= 0.0005;
+    }
+
+    // Giới hạn độ trôi mỗi phiên trong [-0.25%, +0.25%] để bảo toàn tính vững chắc
+    dailyDrift = Math.max(-0.0025, Math.min(0.0025, dailyDrift));
+  }
+
+  // Co giãn biến động động theo chu kỳ (Dynamic Volatility Scaling)
+  const volScale = (atrRatio && Number.isFinite(atrRatio)) ? Math.max(0.8, Math.min(1.3, atrRatio)) : 1.0;
+  const driftFactor = 1 + dailyDrift;
+
+  // Cập nhật các bước nhảy ngẫu nhiên
+  for (const x of sampleSteps) {
+    x.cRatio = (1 + (x.cRatio - 1) * volScale) * driftFactor;
+  }
+
   const rand = rng(seed ?? seedOf(bars));
   const B = Math.max(1, Math.min(block, sampleSteps.length));
 
@@ -214,6 +257,8 @@ export function monteCarloForecast(bars, H = 20, numPaths = 1000, { exchange = '
     h: H,
     numPaths,
     baseClose,
+    dailyDriftPct: round(dailyDrift * 100, 3),
+    regimeContext: (trendState || marketTrend || score != null) ? { trendState, marketTrend, score, foreignRatio20 } : null,
     finalRetMedian: round(quantile(finalRets, 0.5)),
     finalRetP10: round(quantile(finalRets, 0.1)),
     finalRetP90: round(quantile(finalRets, 0.9)),

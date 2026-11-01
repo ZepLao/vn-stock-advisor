@@ -13,31 +13,31 @@ export const REGIMES = {
     code: 'CONFIRMED_UPTREND',
     label: 'XU HƯỚNG TĂNG XÁC NHẬN',
     color: '#10b981',
-    exposure: 'theo quy tắc',
+    exposure: '80–100%',
     maxHoldings: 10,
     allowNewBuys: true,
     cashPct: 10,
-    desc: 'Thị trường vận động lành mạnh trên MA50, số ngày phân phối thấp. Tận dụng cơ hội giải ngân vào các cổ phiếu dẫn dắt.',
+    desc: 'Thị trường vận động lành mạnh trên MA50, số ngày phân phối thấp (≤ 2 phiên). Tận dụng cơ hội giải ngân vào các cổ phiếu dẫn dắt phá nền.',
   },
   UPTREND_UNDER_PRESSURE: {
     code: 'UPTREND_UNDER_PRESSURE',
     label: 'XU HƯỚNG TĂNG BỊ ÁP LỰC',
     color: '#f59e0b',
-    exposure: 'theo quy tắc',
-    maxHoldings: 10,
+    exposure: '40–60%',
+    maxHoldings: 6,
     allowNewBuys: true,
-    cashPct: 0,
-    desc: 'Xuất hiện 3–4 ngày phân phối hoặc tiệm cận MA50. Chỉ để tham khảo: dữ liệu 4 năm không cho thấy giảm tỷ trọng theo tín hiệu này giúp tăng lãi.',
+    cashPct: 40,
+    desc: 'Xuất hiện 3–4 ngày phân phối hoặc tiệm cận MA50. Hạn chế mua đuổi, hạ margin, chỉ mở vị thế thăm dò 50% quy mô nếu cổ phiếu có EV cao và ngành hút tiền mạnh.',
   },
   MARKET_CORRECTION: {
     code: 'MARKET_CORRECTION',
     label: 'THỊ TRƯỜNG ĐIỀU CHỈNH / RỦI RO',
     color: '#ef4444',
-    exposure: 'theo quy tắc',
-    maxHoldings: 10,
-    allowNewBuys: true,
-    cashPct: 0,
-    desc: 'Số ngày phân phối lớn (≥ 5 phiên) hoặc gãy MA50. Chỉ để tham khảo: đứng ngoài theo tín hiệu này làm giảm lãi trong backtest 3–4 năm (thị trường hồi nhanh hơn tín hiệu), nên vẫn theo quy tắc mua/giữ.',
+    exposure: '0–20%',
+    maxHoldings: 3,
+    allowNewBuys: false,
+    cashPct: 80,
+    desc: 'Số ngày phân phối lớn (≥ 5 phiên) hoặc gãy MA50 kèm thanh khoản lớn. Quản trị rủi ro tối đa, phòng thủ 80–100% tiền mặt, tạm dừng mua mới để tránh bẫy giảm giá T+2.',
   },
   UNKNOWN: {
     code: 'UNKNOWN',
@@ -141,6 +141,14 @@ export function evaluateMarketRegime(indexBars, breadth = null) {
   const aboveMa200 = s200 != null && lastClose > s200;
   const ma20AboveMa50 = s20 != null && s50 != null && s20 > s50;
 
+  // Đo mức sụt giảm từ đỉnh 1 năm (~250 phiên) - Nghiên cứu Laban / quality_research.py (HOSE 2018–2026):
+  // Khi VN-Index giảm ≥ 15% từ đỉnh 1 năm (BAD_DD = -0.15), thị trường bước vào vùng chiết khấu sâu.
+  // Trong điều kiện này, cổ phiếu cơ bản chất lượng cao (ROE ≥ 12%, nợ thấp) đem lại lợi suất vượt trội +5% đến +10%/năm.
+  const look1y = Math.min(250, indexBars.length);
+  const high250 = Math.max(...indexBars.slice(-look1y).map((b) => b.high ?? b.close));
+  const from1yHighPct = high250 > 0 ? Math.round(((lastClose / high250) - 1) * 1000) / 10 : 0;
+  const isDeepDip = from1yHighPct <= -15.0;
+
   // Tính điểm sức khỏe thị trường 0 - 100
   let healthScore = 50;
   if (aboveMa20) healthScore += 15; else healthScore -= 15;
@@ -179,6 +187,9 @@ export function evaluateMarketRegime(indexBars, breadth = null) {
     distDays: distCount,
     distList: distDays,
     breadth: breadth || null,
+    high250: Math.round(high250 * 100) / 100,
+    from1yHighPct,
+    isDeepDip,
   };
 }
 

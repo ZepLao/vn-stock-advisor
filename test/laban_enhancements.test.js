@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectStockRisk } from '../src/risk.js';
+import { detectStockRisk, detectBuyWarnings } from '../src/risk.js';
 import { trendFeatures, applyTrendPicks, TREND_PICK_RULE } from '../src/ranking.js';
 import { monteCarloForecast, classifySignal } from '../src/forecast.js';
+import { evaluateMarketRegime } from '../src/regime.js';
+import { rankRecommendation, technicalAnalysis } from '../src/analyze.js';
 
 const day = (i) => new Date(Date.UTC(2025, 0, 1 + i)).toISOString().slice(0, 10);
 
@@ -106,4 +108,80 @@ test('monteCarloForecast & classifySignal: mô phỏng xác suất và phân lo�
 
   // Khi isRisky = true, không được trả STRONG_BUY hay BUY
   assert.equal(classifySignal(strongBuyStats, true).signal, 'RISK_BUY');
+});
+
+test('detectBuyWarnings: kiểm chứng 2 chốt chặn Khoan Mua (SSL Break & Weak Stock) theo nghiên cứu Laban', () => {
+  // 1. Cổ phiếu bình thường: không kích hoạt cảnh báo
+  const normalBars = Array.from({ length: 40 }, (_, i) => ({
+    time: day(i), open: 50, high: 51, low: 49, close: 50 + (i * 0.1), volume: 500000,
+  }));
+  const normalWarns = detectBuyWarnings(normalBars, 10e9);
+  assert.equal(normalWarns.length, 0);
+
+  // 2. Weak stock: Giảm >= 3% trong 5 phiên và dưới MA20
+  const weakBars = Array.from({ length: 30 }, (_, i) => ({
+    time: day(i), open: 60, high: 61, low: 59, close: 60, volume: 500000,
+  }));
+  // 5 phiên cuối giảm từ 60 xuống 57 (-5.0%)
+  for (let i = 25; i < 30; i++) {
+    weakBars[i].close = 60 - (i - 24) * 0.6; // 59.4, 58.8, 58.2, 57.6, 57.0
+    weakBars[i].low = weakBars[i].close - 0.5;
+  }
+  const weakWarns = detectBuyWarnings(weakBars, 10e9);
+  assert.ok(weakWarns.some((w) => w.key === 'weak'));
+  const wWeak = weakWarns.find((w) => w.key === 'weak');
+  assert.ok(wWeak.text.includes('khoan mua khoảng 10 phiên'));
+
+  // 3. SSL Break: Giá đóng cửa phá đáy thanh khoản (pivot low) trong 5 phiên gần nhất
+  // Tạo đáy thanh khoản pivot low tại bar index 10 (thấp hơn 7 phiên trước và 6 phiên sau)
+  const sslBars = Array.from({ length: 35 }, (_, i) => ({
+    time: day(i), open: 50, high: 51, low: 48, close: 50, volume: 500000,
+  }));
+  // Làm cho bar 10 có low = 40 (pivot low)
+  sslBars[10].low = 40;
+  // Các bar 3-9 và 11-16 đều có low >= 45
+  for (let i = 3; i <= 16; i++) {
+    if (i !== 10) sslBars[i].low = 45 + (i % 3);
+  }
+  // Tại bar 33 (trong 5 phiên cuối), giá đóng cửa thủng dưới 40 (ví dụ 39)
+  sslBars[33].close = 39;
+  sslBars[34].close = 38.5;
+  const sslWarns = detectBuyWarnings(sslBars, 10e9);
+  assert.ok(sslWarns.some((w) => w.key === 'ssl'));
+  const wSsl = sslWarns.find((w) => w.key === 'ssl');
+  assert.ok(wSsl.text.includes('khoan mua khoảng 10 phiên'));
+});
+
+test('rankRecommendation & technicalAnalysis: nâng cấp RSI động lượng và rào chắn buyWarnings', () => {
+  // Gating buyWarnings trong rankRecommendation
+  const mockRank = { score: 85, aboveMa200: true, position: 2, universe: 100 };
+  const mockWarning = [{ key: 'ssl', name: '⚠️ Thủng SSL', text: 'đóng cửa dưới đáy thanh khoản: khoan mua khoảng 10 phiên', tested: 'test' }];
+  const recBlocked = rankRecommendation(mockRank, { buyWarnings: mockWarning });
+  assert.equal(recBlocked.code, 'HOLD');
+  assert.ok(recBlocked.desc.includes('khoan mua khoảng 10 phiên'));
+
+  // RSI trong vùng 70–82 trong xu hướng tăng (trên MA200) được thưởng điểm động lượng dẫn sóng thay vì phạt -15
+  const uptrendBars = Array.from({ length: 220 }, (_, i) => {
+    const pull = (i % 4 === 0) ? -0.1 : 0.2;
+    const c = 20 + i * 0.1 + pull;
+    return { time: day(i), open: c * 0.99, high: c * 1.01, low: c * 0.98, close: c, volume: 500000 };
+  });
+  const tech = technicalAnalysis(uptrendBars, { trend: 'up' });
+  assert.ok(tech.indicators.rsi14 >= 70 && tech.indicators.rsi14 <= 82);
+  assert.ok(tech.signals.some((s) => s.text.includes('động lượng dẫn sóng mạnh') && s.points > 0));
+  assert.ok(tech.score > 30);
+});
+
+test('evaluateMarketRegime: phát hiện chế độ sụt sâu (Quality Deep Dip) khi VN-Index giảm >= 15% từ đỉnh 1 năm', () => {
+  // Tạo 250 phiên chỉ số: đỉnh tại 1200, sau đó rơi về 1000 (-16.6% từ đỉnh)
+  const indexBars = Array.from({ length: 250 }, (_, i) => {
+    let c = 1100 + i * 0.5;
+    if (i < 100) c = 1200; // Đỉnh 1200
+    else c = 1200 - (i - 100) * 1.4; // Rơi dần về ~990
+    return { time: day(i), open: c, high: c + 2, low: c - 2, close: c, volume: 10000000 };
+  });
+  const regime = evaluateMarketRegime(indexBars);
+  assert.ok(regime.high250 >= 1200);
+  assert.ok(regime.from1yHighPct <= -15.0);
+  assert.equal(regime.isDeepDip, true);
 });

@@ -186,9 +186,9 @@ export function holdingLine(a, code = a.brief?.code, { noAi = false, final = nul
     lines.push(`${IND}💼 Vị thế: <b>${num(h.qty, 0)}</b> cp · Giá vốn: <b>${num(h.avgCost)}</b> (~${num(val / 1e6, 2)} tr)`);
   }
 
-  const chanStr = detailed && a.plan?.trailing?.chandelierStop ? ` · Chặn lãi Chandelier: <b>${num(a.plan.trailing.chandelierStop)}</b>` : '';
-  const targetStr = detailed && L?.target ? ` · Mục tiêu: <b>${num(L.target)}</b>` : '';
-  lines.push(`${IND}👉 ${todo}${chanStr}${targetStr}${noAi ? ' <i>(chưa qua AI)</i>' : ''}`);
+  // Kháng cự chỉ để tham khảo: luật nắm giữ không chốt lời theo mốc giá cố định
+  const targetStr = detailed && L?.target ? ` · Kháng cự gần: <b>${num(L.target)}</b>` : '';
+  lines.push(`${IND}👉 ${todo}${targetStr}${noAi ? ' <i>(chưa qua AI)</i>' : ''}`);
 
   if (detailed) {
     const aiNote = final?.note || (a.brief?.reasons || []).slice(0, 2).map((r) => r.text || r).join(' · ');
@@ -237,11 +237,12 @@ export async function aiFinal(a, tracker) {
 /**
  * Lập lệnh cho phiên tới (hàm thuần).
  * @param {{ held: { a: object, sector?: string }[], candidates: { a: object, sector?: string, final?: object, aiNo?: boolean }[],
- *   capital?: number|null, buyCount?: number, slots?: number, perSector?: number }} o
+ *   capital?: number|null, cash?: number|null, buyCount?: number, slots?: number, perSector?: number }} o
+ *   cash: tiền mặt dùng được (sổ tiền mặt của Danh mục, đã trừ lõi ETF); lệnh mua không vượt quá số này.
  *   held: phân tích các mã đang giữ (a.holding, a.brief.levels.heldSessions / holdStop); candidates: mã mua đã lọc, xếp hạng giảm dần.
  * @returns {{ sells, review, keep, buys, freeSlots, slotValue }}
  */
-export function planOrders({ held, candidates, capital = null, buyCount = 5, slots = SLOT_RULES.slots, perSector = SLOT_RULES.perSector }) {
+export function planOrders({ held, candidates, capital = null, cash = null, buyCount = 5, slots = SLOT_RULES.slots, perSector = SLOT_RULES.perSector }) {
   const N = HOLD_RULE.sessions;
   const sells = [], review = [], keep = [];
   for (const { a, sector } of held) {
@@ -262,6 +263,7 @@ export function planOrders({ held, candidates, capital = null, buyCount = 5, slo
   const freeSlots = Math.max(0, slots - staying.length);
   const slotValue = capital > 0 ? capital / slots : null;
   const buys = [];
+  let left = cash, wanted = 0; // tiền mặt còn lại; tổng tiền cần nếu mua đủ suất
   for (const c of candidates) {
     if (buys.length >= Math.min(freeSlots, buyCount)) break;
     const sec = c.sector || null;
@@ -269,14 +271,23 @@ export function planOrders({ held, candidates, capital = null, buyCount = 5, slo
     const L = c.a.brief?.levels || {}, price = L.buyTo ?? c.a.price.close;
     const half = (c.final?.code ?? c.a.brief?.code) === 'ACCUMULATE';
     const budget = slotValue != null ? slotValue * (half ? 0.5 : 1) : null;
-    const shares = budget != null && price > 0 ? Math.floor(budget / (price * 1000) / 100) * 100 : null;
+    let shares = budget != null && price > 0 ? Math.floor(budget / (price * 1000) / 100) * 100 : null;
+    if (shares != null) wanted += shares * price * 1000;
+    // Không đủ tiền mặt: mua ít lô hơn; không đủ một lô thì dừng (mã điểm cao hơn được ưu tiên)
+    if (left != null && shares != null) {
+      const fit = Math.floor(left / (price * 1000 * 1.0015) / 100) * 100;
+      if (fit < 100) break;
+      shares = Math.min(shares, fit);
+      left -= shares * price * 1000 * 1.0015;
+    }
     buys.push({
       symbol: c.a.symbol, sector: sec, price, shares, value: shares != null ? shares * price * 1000 : null, half,
       score: c.a.ranking?.score ?? null, trendPick: Boolean(c.a.ranking?.trendPick), stop: L.stop ?? null, aiNo: Boolean(c.aiNo),
     });
     if (sec) perSec.set(sec, (perSec.get(sec) || 0) + 1);
   }
-  return { sells, review, keep, buys, freeSlots, slotValue, slots };
+  return { sells, review, keep, buys, freeSlots, slotValue, slots,
+    cash: cash != null ? { available: Math.round(cash), used: Math.round(cash - left), short: Math.max(0, Math.round(wanted - cash)) } : null };
 }
 
 const REGIME_LABEL = { CONFIRMED_UPTREND: '🟢 tăng', UPTREND_UNDER_PRESSURE: '🟡 tăng có áp lực', MARKET_CORRECTION: '🔴 điều chỉnh', UNKNOWN: '⚪ chưa xác định (không mua mới)' };
@@ -299,6 +310,11 @@ export function formatCloseReport({ date, market, regime, plan, summary = null, 
     const o = core.order;
     const what = o.side === 'hold' ? `giữ (đang ${num((o.weight ?? 0) * 100, 0)}%)` : `<b>${o.side === 'buy' ? 'mua' : 'bán'} ${num(o.shares, 0)}</b> ccq LO ${num(core.price)} ≈ ${num(o.value / 1e6, 0)} tr`;
     L.push('', `🧺 <b>LÕI ETF ${esc(core.symbol)}</b> ${Math.round(core.pct * 100)}% vốn: ${what}`);
+  }
+  if (plan.cash) {
+    const c = plan.cash;
+    L.push('', `💵 Tiền mặt dùng được <b>${num(c.available / 1e6, 1)} tr</b>${plan.buys.length ? ` · dùng ${num(c.used / 1e6, 1)} tr cho ${plan.buys.length} lệnh` : ''}`
+      + `${c.short > 0 && plan.freeSlots ? ` · <b>thiếu ${num(c.short / 1e6, 1)} tr</b> để mua đủ suất (nạp thêm hoặc chờ tiền bán về)` : ''}`);
   }
   if (slots === 0) {
     L.push('', '🟢 <b>MUA</b>: <i>vốn chọn mã dưới 20 triệu, một suất không đủ lô 100 cp: nên mua ETF (vd E1VFVN30) thay vì chọn mã.</i>');
@@ -347,8 +363,11 @@ export function formatMorning(plan, date) {
 const VERDICT_TXT = { insufficient: 'chưa đủ dữ liệu', supported: '✅ ủng hộ', rejected: '❌ bác bỏ', inconclusive: 'chưa kết luận' };
 
 /** Tổng kết tuần (hàm thuần). */
-export function formatWeekly({ date, summary = null, holdings = [], hypotheses = [], tuning = [], slots = SLOT_RULES.slots }) {
+export function formatWeekly({ date, summary = null, holdings = [], hypotheses = [], tuning = [], slots = SLOT_RULES.slots, capital = null }) {
   const L = [`📅 <b>TỔNG KẾT TUẦN · đến ${ddmm(date)}</b>`];
+  if (capital?.nav && capital.source === 'portfolio') {
+    L.push('', `💵 Vốn ${num(capital.netContributed / 1e6, 1)} tr · đã mua ${num((capital.invested ?? 0) / 1e6, 1)} tr · tiền mặt còn <b>${num(capital.cash / 1e6, 1)} tr</b>`);
+  }
   if (summary) {
     L.push('', `💼 Danh mục ${holdings.length}/${slots} mã · giá trị ${num(summary.marketValue / 1e6, 0)} tr · ${summary.unrealizedPct >= 0 ? 'lãi' : 'lỗ'} <b>${sgn(summary.unrealizedPct)}</b> chưa chốt · đã chốt ${money(summary.realized)}`);
     const secs = {};
@@ -387,7 +406,7 @@ export async function buildReport(kind = 'close') {
     const date = (await getPriceHistory('VNINDEX')).bars.at(-1).time;
     return {
       text: formatWeekly({
-        date, summary: pf?.summary, slots: slotsForCapital(accountCapital() != null ? accountCapital() * (1 - coreConfig().pct) : null),
+        date, summary: pf?.summary, capital: pf?.capital, slots: pf?.capital?.slots ?? slotsForCapital(accountCapital() != null ? accountCapital() * (1 - coreConfig().pct) : null),
         holdings: (pf?.holdings || []).filter((h) => h.symbol !== coreConfig().symbol).map((h) => ({ ...h, sector: sectors.get(h.symbol)?.name })),
         hypotheses: v?.hypotheses || [], tuning: tuningLog().filter((x) => x.at >= weekAgo),
       }),
@@ -436,26 +455,38 @@ export async function buildReport(kind = 'close') {
     else rejected.push(a.symbol);
   }
   const held = (await analyzeAll(heldSyms)).filter((a) => a.holding).map((a) => ({ a, sector: sectors.get(a.symbol)?.name }));
-  const capital = accountCapital();
+  // Vốn = tổng tài sản theo sổ tiền mặt của Danh mục (không có thì ACCOUNT_CAPITAL); tiền mặt khả dụng giới hạn lệnh mua
+  const capital = pf?.capital?.nav ?? accountCapital();
+  let cash = pf?.capital?.available ?? null;
   const satCapital = capital != null ? capital * (1 - core.pct) : null;
   const slots = slotsForCapital(satCapital);
-  const plan = planOrders({ held, candidates, capital: satCapital, buyCount, slots });
   let coreInfo = null;
   if (core.symbol && capital) {
     const bars = (await getPriceHistory(core.symbol).catch(() => null))?.bars;
     const price = bars?.at(-1)?.close;
     const qty = (pf?.holdings || []).find((h) => h.symbol === core.symbol)?.qty ?? 0;
-    if (price) coreInfo = { symbol: core.symbol, pct: core.pct, price, order: coreOrder({ pct: core.pct, capital, price, qty }) };
+    if (price) {
+      coreInfo = { symbol: core.symbol, pct: core.pct, price, order: coreOrder({ pct: core.pct, capital, price, qty }) };
+      // Lõi ETF được ưu tiên dùng tiền mặt trước (không vượt quá tiền đang có)
+      if (cash != null && coreInfo.order.side === 'buy') {
+        const fit = Math.floor(Math.max(0, cash) / (price * 1000 * 1.0015) / 100) * 100;
+        if (fit < coreInfo.order.shares) Object.assign(coreInfo.order, { shares: fit, value: fit * price * 1000, side: fit ? 'buy' : 'hold' });
+        cash -= coreInfo.order.value * 1.0015;
+      }
+    }
   }
+  const plan = planOrders({ held, candidates, capital: satCapital, cash, buyCount, slots });
   plan.core = coreInfo;
   const { getMarketRegime } = await import('./regime.js');
   const regime = await getMarketRegime().catch(() => null);
   const expectation = plan.buys[0] ? candidates.find((c) => c.a.symbol === plan.buys[0].symbol)?.a.expectation : null;
   const notes = [
     rejected.length && `AI loại: ${rejected.map(esc).join(', ')}`,
-    junk.length && `Chất lượng kém: ${junk.map(esc).join(', ')}`,
+    junk.length && `Chất lượng kém / rủi ro: ${junk.map(esc).join(', ')}`,
     unverified.length && `AI chưa thẩm định kịp: ${unverified.map(esc).join(', ')}`,
-    !capital && 'Đặt ACCOUNT_CAPITAL trong .env để tool tính số cổ phiếu và số suất theo vốn.',
+    !capital && 'Nhập số vốn ở trang Danh mục (💵 Quản lý vốn) hoặc nhắn bot "nạp 50tr" để tool tính số cổ phiếu theo vốn và tiền mặt.',
+    pf?.capital?.warning && esc(pf.capital.warning),
+    plan.buys.length > 0 && '💡 Khung giờ khớp lệnh: Dữ liệu thống kê > 10.000 phiên cho thấy 9h sáng thường trượt −0,32%, ưu tiên đặt lệnh sau 13:15 khi lực cầu T+2 hấp thụ tốt hơn.',
     !core.symbol && `Tùy chọn lõi ETF: CORE_ETF=${CORE_RULES.suggest.symbol}, CORE_PCT=${CORE_RULES.suggest.pct} (backtest: lãi ngang, sụt tối đa giảm ~2,5 điểm %).`,
   ].filter(Boolean);
   const date = market?.date || board.date;

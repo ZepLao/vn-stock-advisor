@@ -10,7 +10,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeSymbol } from './analyze.js';
-import { aiConfig, buildPrompt, callWithRetry, DECISIONS } from './ai.js';
+import { aiConfig, buildPrompt, callWithRetry, DECISIONS, capitalLine } from './ai.js';
 import { runRankPortfolio, PORTFOLIO_RULE } from './ranking.js';
 import { riskProfile, riskBrief } from './risk.js';
 import { getPriceHistory } from './data.js';
@@ -297,7 +297,7 @@ async function run(symbol, { force = false } = {}) {
   if (bt) evidence.push(rankEvidence(bt, a));
   if (risk) evidence.push(riskBrief(risk));
   const base = buildPrompt(a).replace(/\nHãy phân tích và trả về JSON theo schema\.$/, '') + evidence.join('\n')
-    + geminiSection(gemini) + holdingSection(a);
+    + geminiSection(gemini) + holdingSection(a) + capitalLine(a.capital);
 
   job.step = 3;
   job.stage = 'Phe mua và phe bán đang lập luận';

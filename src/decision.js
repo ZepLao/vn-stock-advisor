@@ -120,16 +120,24 @@ export function finalDecision(a, ai, committee = null) {
   const { relation, aiCode } = fused;
   // Giá bị ghim (chào mua/hoán đổi): mua vào không có dư địa lãi, tối đa là GIỮ
   const pinned = LEVEL[fused.code] > LEVEL.HOLD ? pinnedNote(a.recentBars) : null;
-  const code = pinned ? 'HOLD' : fused.code;
+  // Phủ quyết toán học: Kỳ vọng EV âm hoặc vi phạm Kelly
+  const mathVeto = (LEVEL[fused.code] > LEVEL.HOLD && (a.mathProb ?? b.mathProb) && !(a.mathProb ?? b.mathProb).pass) ? (a.mathProb ?? b.mathProb) : null;
+  const code = pinned || mathVeto ? 'HOLD' : fused.code;
   const label = RECOMMENDATIONS.find((r) => r.code === code)?.label || code;
   const sysLabel = a.recommendation.label;
   const who = committee ? 'Hội đồng đầu tư' : 'AI';
   const why = committee ? (committee.debateSummary || '') : (ai.planReview?.reason || ai.headline || '');
   const bad = (ai.marketChecks || []).filter((x) => x.status === 'XAU').map((x) => x.label.toLowerCase());
   let note;
-  if (relation === 'stricter') note = `${who} hạ từ ${sysLabel} xuống ${label}${bad.length ? ` (yếu tố xấu: ${bad.join(', ')})` : ''}. ${why}`;
-  else if (relation === 'looser') note = `${who} tích cực hơn (${src.decisionLabel}) nhưng tín hiệu định lượng chưa xác nhận nên giữ ${label}. ${why}`;
-  else note = `${who} đồng ý ${label}. ${why}`;
+  if (mathVeto) {
+    note = `Phủ quyết Toán học (Mathematical Veto): ${mathVeto.reasons[0] || 'Kỳ vọng toán học âm'}. Dù ${who} có đề xuất ${src.decisionLabel || 'mua'}, hệ thống buộc giữ mức ${label} để bảo toàn vốn. ${why}`;
+  } else if (relation === 'stricter') {
+    note = `${who} hạ từ ${sysLabel} xuống ${label}${bad.length ? ` (yếu tố xấu: ${bad.join(', ')})` : ''}. ${why}`;
+  } else if (relation === 'looser') {
+    note = `${who} tích cực hơn (${src.decisionLabel}) nhưng tín hiệu định lượng chưa xác nhận nên giữ ${label}. ${why}`;
+  } else {
+    note = `${who} đồng ý ${label}. ${why}`;
+  }
   if (pinned) note = `Không mua mới: ${pinned}. ${note}`;
 
   const i = a.technical.indicators;

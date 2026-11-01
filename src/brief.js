@@ -3,6 +3,7 @@
 import { priceLevels, tradeSteps, HOLD_RULE, tick } from './tradeplan.js';
 import { getTuning } from './tuning.js';
 import { positionSize, slotSize, slotsForCapital, coreConfig } from './sizing.js';
+import { calculateMathProbability } from './mathprob.js';
 
 export { positionSize };
 
@@ -48,6 +49,9 @@ export function playbook(code, c) {
       newBuyer = [
         `Mua một lần bằng lệnh LO giá ${n(c.close)} cho phiên tới, ${code === 'BUY' ? `một suất ${w}% vốn` : `nửa suất ${Math.max(1, Math.round(w / 2))}% vốn`}; không khớp thì xét lại phiên sau, không đuổi giá`,
         `Giữ khoảng ${N} phiên rồi xem lại; cảnh báo nếu đóng cửa dưới ${n(c.stop)} (−${Math.round(HOLD_RULE.wideStop * 100)}%), không cắt lỗ sát`,
+        'Lưu ý kẹt hàng T+2: Cổ phiếu chưa về trong T+0 và T+1 (khóa vị thế). Không thể bán, tuyệt đối không bình quân giá xuống khi giá giảm trong thời gian chờ',
+        'Bán: không chốt lời sớm theo mốc %, không dời cắt lỗ về hòa vốn hay cắt lỗ đuổi khi đang lãi (bộ đo 4 năm: cả ba đều làm lãi giảm so với giữ đủ kỳ); bán khi hết kỳ mà mã không còn trong nhóm mua, hoặc đóng cửa dưới ngưỡng cảnh báo',
+        'Thời điểm khớp lệnh tối ưu: Ưu tiên đặt sau 13:15 (dữ liệu thống kê > 10.000 phiên cho thấy đặt ATO / 9h sáng thường trượt giá âm −0,32%, trong khi phiên chiều hấp thụ T+2 tốt hơn)',
       ];
       holder = [`Giữ: vẫn trong nhóm mua${held}`, 'Không mua thêm quá một suất, không bình quân giá xuống'];
       break;
@@ -165,14 +169,22 @@ export function buildBrief(a, sector = null, holding = null, bars = null, risk =
     })(),
     weight: size?.weight ?? null,
     holdStop, heldSessions, holdSessions: HOLD_RULE.sessions,
-    sizing: size ? { binding: size.binding, limits: size.limits, slots: size.slots, capitalKnown: risk?.capital > 0 } : null,
+    sizing: size ? {
+      binding: size.binding, limits: size.limits, slots: size.slots, capitalKnown: risk?.capital > 0,
+      // Một suất theo vốn thật: số tiền, số cổ phiếu (lô 100) và tiền mặt khả dụng có đủ không
+      ...(satCapital && size.weight > 0 ? (() => {
+        const value = satCapital * size.weight;
+        const shares = Math.floor(value / (close * 1000) / 100) * 100;
+        return { slotValue: Math.round(value), shares, available: risk?.available ?? null, cashShort: risk?.available != null && risk.available < shares * close * 1000 };
+      })() : {}),
+    } : null,
   } : null;
   const fmtLv = {
     size: size ? `${Math.round(size.weight * 100)}%` : '10%', half: size ? `${Math.max(1, Math.round(size.weight * 50))}%` : '5%',
     stop: L ? num(L.stop, 2) : '–', close: num(close, 2), avoid: Boolean(r?.avoid),
     blocked: size?.weight === 0 ? size.limits.find((x) => x.key === size.binding)?.text : null,
   };
-  const action = (ACTIONS[a.recommendation.code] || ACTIONS.HOLD)(fmtLv);
+  let action = (ACTIONS[a.recommendation.code] || ACTIONS.HOLD)(fmtLv);
   const plays = levels ? playbook(a.recommendation.code, {
     close, stop: L.stop, holdStop, heldSessions, weight: size?.weight ?? null,
     aboveMa200: r?.aboveMa200, ma200: i.sma200, score: r?.score, avoid: Boolean(r?.avoid), holding,
@@ -185,9 +197,59 @@ export function buildBrief(a, sector = null, holding = null, bars = null, risk =
     .slice(0, 2);
   if (r?.score >= 70 && r.aboveMa200 !== false && (i.rsi14 ?? 0) > 70) risks.push(`RSI ${num(i.rsi14, 0)}: đang nóng, nên chờ nhịp chỉnh để mua`);
 
-  const tone = { BUY: 'up', ACCUMULATE: 'up', HOLD: 'ref', AVOID: 'down', SELL: 'down' }[a.recommendation.code] || 'ref';
+  // Cảnh báo R/R bất lợi khi stoploss xa mà cản gần
+  if (levels?.riskReward != null && levels.riskReward < 0.8 && (a.recommendation.code === 'BUY' || a.recommendation.code === 'ACCUMULATE')) {
+    risks.unshift(`Tỷ lệ Lãi/Lỗ bất lợi (R/R = ${levels.riskReward} lần < 1.0): Tiềm năng tăng giá (+${Math.round(levels.targetPct * 100)}%) không đủ bù đắp rủi ro điều chỉnh (-${Math.round(Math.abs(levels.stopPct) * 100)}%).`);
+  }
+
+  // Cảnh báo cạn kiệt tiền mặt
+  if (risk?.capital > 0 && risk.available != null && (risk.available / risk.capital) < 0.15) {
+    risks.push(`Tiền mặt khả dụng cạn kiệt (< 15% NAV): Ưu tiên giữ tiền mặt, tạm dừng giải ngân mới.`);
+  }
+
+  let verdict = a.recommendation.label;
+  let code = a.recommendation.code;
+  let tone = { BUY: 'up', ACCUMULATE: 'up', HOLD: 'ref', AVOID: 'down', SELL: 'down' }[code] || 'ref';
+
+  const evalLevels = levels ? {
+    ...levels,
+    // Đánh giá dựa trên mục tiêu sóng tăng R2 (khi R1 quá sát) và mức dừng lỗ kỹ thuật thực tế supportStop
+    targetPct: L?.r2 && (L.r2 - close) / close >= 0.05 ? (L.r2 - close) / close : levels.targetPct,
+    stopPct: L?.supportStop ? (L.supportStop - close) / close : levels.stopPct,
+    target: L?.r2 && (L.r2 - close) / close >= 0.05 ? L.r2 : levels.target,
+    stop: L?.supportStop ?? levels.stop,
+  } : null;
+  const mathProb = evalLevels ? calculateMathProbability(bars, evalLevels, a.monteCarlo, a.expectation) : (a.mathProb ?? null);
+  if (mathProb) a.mathProb = mathProb;
+
+  if (mathProb) {
+    if (mathProb.pass) {
+      reasons.unshift({ tone: 'up', text: `Toán học & Xác suất: Tỷ lệ Win ${Math.round(mathProb.pWin * 100)}% (vượt mức hòa vốn ${Math.round(mathProb.breakEvenWinRate * 100)}%), Kỳ vọng EV +${mathProb.expectedValuePct}%, Kelly ${(mathProb.halfKelly * 100).toFixed(0)}% vốn.` });
+    } else {
+      reasons.unshift({ tone: 'down', text: `Toán học & Xác suất: Tỷ lệ Win ${Math.round(mathProb.pWin * 100)}% < mức hòa vốn ${Math.round(mathProb.breakEvenWinRate * 100)}% (R/R ${mathProb.payoffRatio}x), Kỳ vọng EV ${mathProb.expectedValuePct}%.` });
+    }
+  }
+
+  // Chốt chặn Phủ quyết Xác suất & Kỳ vọng toán học (EV <= 0 hoặc Kelly <= 0)
+  if (mathProb && !mathProb.pass && (code === 'BUY' || code === 'ACCUMULATE')) {
+    verdict = 'TẠM HOÃN MUA';
+    code = 'HOLD';
+    tone = 'ref';
+    risks.unshift(`Phủ quyết Toán học: ${mathProb.reasons[0]}`);
+    action = `Tạm hoãn mua mới: Không đạt tiêu chuẩn xác suất toán học (${mathProb.reasons[0] || 'Kỳ vọng âm'}). Tiếp tục theo dõi kỷ luật, bảo toàn vốn.`;
+  }
+
+  if (size?.weight === 0 && (code === 'BUY' || code === 'ACCUMULATE')) {
+    verdict = 'TẠM HOÃN MUA';
+    code = 'HOLD';
+    tone = 'ref';
+    const limitReason = size.limits?.find((x) => x.key === size.binding)?.text || 'Quy mô vốn hoặc giới hạn danh mục không cho phép mở thêm vị thế';
+    risks.unshift(`Không thể giải ngân: ${limitReason}.`);
+    action = `Tạm dừng giải ngân: ${limitReason}. Ưu tiên quản trị rủi ro danh mục và giữ tiền mặt an toàn.`;
+  }
+
   return {
-    verdict: a.recommendation.label, code: a.recommendation.code, tone,
+    verdict, code, tone,
     headline: r ? `Xếp hạng ${r.score}/100 · hạng ${r.position}/${r.universe}` : `Điểm ${a.total}`,
     action,
     reasons: reasons.slice(0, 6),
@@ -196,6 +258,8 @@ export function buildBrief(a, sector = null, holding = null, bars = null, risk =
     plays,
     steps,
     holding,
+    mathProb,
+    mathSummary: mathProb?.summaryNote ?? null,
   };
 }
 

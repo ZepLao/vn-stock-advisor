@@ -7,9 +7,9 @@ import { recordMany } from './predictions.js';
 import { getSectorFlows } from './sectors.js';
 import { getOrderFlow } from './orderflow.js';
 import { coneSummary, monteCarloForecast } from './forecast.js';
-import { detectStockRisk } from './risk.js';
+import { detectStockRisk, detectBuyWarnings } from './risk.js';
 import { getMarketRegime } from './regime.js';
-import { buildDynamicTrailingPlan } from './tradeplan.js';
+import { holdPlan } from './tradeplan.js';
 import { getCompanyProfile } from './company.js';
 import { buildBrief } from './brief.js';
 import { aiFilterNews } from './newsai.js';
@@ -17,6 +17,7 @@ import { checkDataQuality } from './dataquality.js';
 import { accountCapital, portfolioHeat } from './sizing.js';
 import { expectationFor } from './expectancy.js';
 import { recordNewsEvents } from './newsevents.js';
+import { calculateMathProbability } from './mathprob.js';
 
 const RULE_DIRECTION = { BUY: 1, ACCUMULATE: 1, HOLD: 0, AVOID: -1, SELL: -1 };
 
@@ -46,12 +47,12 @@ const REC = Object.fromEntries(RECOMMENDATIONS.map((r) => [r.code, r]));
  * người dùng như sự thật; kết quả đối chiếu là backtest danh mục với rổ theo thời điểm (runRankPortfolio).
  * Tích hợp bộ lọc rủi ro sụt giảm (Laban risk detection) và phân phối xác suất Monte Carlo.
  */
-export function rankRecommendation(r, { flagged = false, losing = false, liquid = true, stockRisk = null, mc = null, marketRegime = null } = {}) {
+export function rankRecommendation(r, { flagged = false, losing = false, liquid = true, overextended = false, foreignDumping = false, bearishDivergence = false, nearResistance = false, stockRisk = null, buyWarnings = [], mc = null, marketRegime = null, sectorFlow = null, mathProb = null } = {}) {
   const above = r.aboveMa200 !== false;
   let rec;
   if (r.avoid) {
     rec = { ...REC.AVOID, desc: `⛔ Thuộc 10% thấp nhất của rổ theo 6 yếu tố (động lượng, gần đỉnh, biến động, ADX, biến động 60 phiên, phiên tăng đột biến). Trong 4 năm nhóm này kém rổ khoảng 1,3% mỗi 20 phiên (≈ −16%/năm, có ý nghĩa thống kê): không mua, đang giữ thì cân nhắc bán.` };
-  } else if ((r.score >= 70 && above) || r.trendPick) {
+  } else if ((r.score >= 70 && above) || (r.trendPick && above)) {
     // Ứng viên mua của danh mục cuốn chiếu (rolling.js, theo Laban): xếp hạng ≥ 70 trên MA200, hoặc xu hướng chuẩn
     let desc = r.score >= 70 && above
       ? `Điểm xếp hạng ${r.score} (hạng ${r.position}/${r.universe}) và giá trên MA200: thuộc nhóm dẫn đầu về động lượng và xu hướng. Hiệu quả lịch sử của nhóm này xem ở Backtest danh mục (rổ theo thời điểm); quá khứ không đảm bảo tương lai.`
@@ -63,12 +64,44 @@ export function rankRecommendation(r, { flagged = false, losing = false, liquid 
     if (flagged) rec = { ...REC.HOLD, desc: 'Thuộc nhóm dẫn đầu nhưng có tin rủi ro nghiêm trọng trong 7 ngày: chờ làm rõ trước khi mua.' };
     else if (losing) rec = { ...REC.HOLD, desc: 'Thuộc nhóm dẫn đầu về giá nhưng doanh nghiệp đang lỗ 4 quý gần nhất: chỉ theo dõi.' };
     else if (!liquid) rec = { ...REC.ACCUMULATE, desc: 'Thuộc nhóm dẫn đầu nhưng thanh khoản dưới ngưỡng 5 tỷ/phiên: chỉ mua tỷ trọng nhỏ.' };
+    else if (overextended) rec = { ...REC.HOLD, desc: 'Thuộc nhóm dẫn đầu nhưng giá đã tăng quá nóng trong ngắn hạn (RSI > 82 hoặc cách MA20 > 12%): không mua đuổi, kiên nhẫn chờ nhịp chỉnh hoặc tích lũy về gần hỗ trợ.' };
+    else if (foreignDumping) rec = { ...REC.HOLD, desc: 'Thuộc nhóm dẫn đầu nhưng khối ngoại đang bán ròng áp đảo (> 25% GTGD): tạm hoãn mua mới cho đến khi áp lực xả của khối ngoại chững lại.' };
+    else if (bearishDivergence) rec = { ...REC.HOLD, desc: 'Thuộc nhóm dẫn đầu nhưng xuất hiện Phân kỳ âm RSI tại vùng đỉnh (giá tạo đỉnh mới nhưng RSI tạo đỉnh thấp hơn): lực mua suy yếu, rủi ro đảo chiều điều chỉnh cao, không mua đuổi.' };
+    else if (nearResistance) rec = { ...REC.HOLD, desc: 'Thuộc nhóm dẫn đầu nhưng giá áp sát ngưỡng kháng cự đỉnh (cách cản < 2%): biên lợi nhuận ngắn hạn quá mỏng, kiên nhẫn chờ vượt cản xác nhận hoặc mua tại nhịp chỉnh.' };
   } else if (r.score >= 70) {
     rec = { ...REC.AVOID, desc: `Điểm xếp hạng cao (${r.score}) nhưng giá dưới MA200: trong nghiên cứu trước nhóm này thường kém VN-Index. Chờ giá vượt MA200.` };
   } else if (r.score >= 30) {
     rec = { ...REC.HOLD, desc: `Điểm xếp hạng ${r.score} (hạng ${r.position}/${r.universe}): nhóm giữa, chưa có lợi thế rõ so với thị trường.` };
   } else {
     rec = { ...REC.AVOID, desc: `Điểm xếp hạng ${r.score} (hạng ${r.position}/${r.universe}): nhóm đội sổ về động lượng, xu hướng và độ ổn định. Trong nghiên cứu trước nhóm này thường kém VN-Index; đây là so với thị trường, phiên cả thị trường tăng mạnh mã vẫn có thể tăng.` };
+  }
+
+  // Chốt chặn Cảnh báo Khoan mua đã kiểm chứng (Laban: Thủng SSL hoặc Cổ phiếu suy yếu)
+  if (buyWarnings?.length && (rec.code === 'BUY' || rec.code === 'ACCUMULATE')) {
+    const primaryW = buyWarnings[0];
+    rec = {
+      ...REC.HOLD,
+      desc: `Thuộc nhóm dẫn đầu nhưng kích hoạt cảnh báo [${primaryW.name}]: ${primaryW.text} (${primaryW.tested}). Khoan mua khoảng 10 phiên.`,
+    };
+  }
+
+  // Chặn mua khi ngành bị rút ròng mạnh (như trường hợp Vận tải / Cảng biển bị bán 1.400 tỷ)
+  if (sectorFlow && (rec.code === 'BUY' || rec.code === 'ACCUMULATE')) {
+    const cold = (sectorFlow.rank > sectorFlow.total - 3 && sectorFlow.net < 0) || sectorFlow.net <= -500e9;
+    if (cold) {
+      rec = {
+        ...REC.HOLD,
+        desc: `Cổ phiếu có điểm kỹ thuật tốt (${r.score}) nhưng ngành ${sectorFlow.name} đang bị rút ròng mạnh (${(sectorFlow.net / 1e9).toFixed(0)} tỷ trong ${sectorFlow.period || 5} phiên): tạm hoãn mua mới để tránh rủi ro dòng tiền ngành rút ra.`,
+      };
+    }
+  }
+
+  // Chốt chặn Phủ quyết Toán học & Xác suất: Kỳ vọng EV <= 0 hoặc Kelly <= 0
+  if (mathProb && !mathProb.pass && (rec.code === 'BUY' || rec.code === 'ACCUMULATE')) {
+    rec = {
+      ...REC.HOLD,
+      desc: `Điểm số kỹ thuật tích cực (${r.score}) nhưng KHÔNG ĐẠT TIÊU CHUẨN XÁC SUẤT TOÁN HỌC: ${mathProb.reasons[0] || 'Kỳ vọng toán học âm'}. Tạm hoãn giải ngân để bảo toàn vốn.`,
+    };
   }
 
   // Chặn dao rơi / sụt giảm mạnh (tham khảo Laban _detect_stock_risk)
@@ -131,11 +164,25 @@ export function technicalAnalysis(bars, market, { indexBars = null, foreign = nu
     ? signal(signals, 10, 'Giá trên MA200')
     : signal(signals, -10, 'Giá dưới MA200, chưa thoát xu hướng giảm dài hạn');
 
+  const underTrend = v200 != null && close < v200;
+
   const rv = last(r);
   if (rv != null) {
-    if (rv < 30) sum += signal(signals, 15, `RSI ${rv.toFixed(0)} < 30: vùng quá bán, khả năng hồi phục kỹ thuật`);
-    else if (rv > 70) sum += signal(signals, -15, `RSI ${rv.toFixed(0)} > 70: vùng quá mua, rủi ro điều chỉnh`);
-    else if (rv >= 50) sum += signal(signals, 5, `RSI ${rv.toFixed(0)}: động lượng tích cực`);
+    if (rv < 30) {
+      sum += underTrend
+        ? signal(signals, 2, `RSI ${rv.toFixed(0)} < 30: vùng quá bán nhưng giá dưới MA200 (rủi ro bắt dao rơi cao)`)
+        : signal(signals, 15, `RSI ${rv.toFixed(0)} < 30: vùng quá bán trong xu hướng tăng, khả năng hồi phục kỹ thuật`);
+    } else if (rv > 70) {
+      if (!underTrend) {
+        if (rv <= 82) {
+          sum += signal(signals, 10, `RSI ${rv.toFixed(0)} >= 70 trong xu hướng tăng: động lượng dẫn sóng mạnh`);
+        } else {
+          sum += signal(signals, -5, `RSI ${rv.toFixed(0)} > 82: tăng nóng cực đại ngắn hạn, hạn chế mua đuổi`);
+        }
+      } else {
+        sum += signal(signals, -15, `RSI ${rv.toFixed(0)} > 70 trong xu hướng giảm dài hạn (dưới MA200): nhịp hồi quá đà, rủi ro quay đầu giảm`);
+      }
+    } else if (rv >= 50) sum += signal(signals, 5, `RSI ${rv.toFixed(0)}: động lượng tích cực`);
     else sum += signal(signals, -5, `RSI ${rv.toFixed(0)}: động lượng yếu`);
   }
 
@@ -190,8 +237,8 @@ export function technicalAnalysis(bars, market, { indexBars = null, foreign = nu
   if (kNow != null && dNow != null) {
     const crossUp = kPrev != null && dPrev != null && kPrev <= dPrev && kNow > dNow;
     const crossDown = kPrev != null && dPrev != null && kPrev >= dPrev && kNow < dNow;
-    if (kNow < 20 && crossUp) sum += signal(signals, 10, `Stochastic ${kNow.toFixed(0)} cắt lên trong vùng quá bán: tín hiệu mua sớm`);
-    else if (kNow < 20) sum += signal(signals, 4, `Stochastic ${kNow.toFixed(0)}: vùng quá bán`);
+    if (kNow < 20 && crossUp) sum += signal(signals, underTrend ? 2 : 10, underTrend ? `Stochastic ${kNow.toFixed(0)} cắt lên nhưng giá dưới MA200: chỉ là nhịp hồi kỹ thuật ngắn` : `Stochastic ${kNow.toFixed(0)} cắt lên trong vùng quá bán: tín hiệu mua sớm`);
+    else if (kNow < 20) sum += signal(signals, underTrend ? 1 : 4, `Stochastic ${kNow.toFixed(0)}: vùng quá bán`);
     else if (kNow > 80 && crossDown) sum += signal(signals, -10, `Stochastic ${kNow.toFixed(0)} cắt xuống trong vùng quá mua: tín hiệu bán sớm`);
     else if (kNow > 80) sum += signal(signals, -4, `Stochastic ${kNow.toFixed(0)}: vùng quá mua`);
   }
@@ -199,7 +246,7 @@ export function technicalAnalysis(bars, market, { indexBars = null, foreign = nu
   // --- Dòng tiền theo khối lượng (MFI, OBV) ---
   const mf = last(mfi(bars, 14));
   if (mf != null) {
-    if (mf < 20) sum += signal(signals, 8, `MFI ${mf.toFixed(0)} < 20: dòng tiền bị rút quá mức, dễ hồi phục`);
+    if (mf < 20) sum += signal(signals, underTrend ? 2 : 8, underTrend ? `MFI ${mf.toFixed(0)} < 20: dòng tiền rút mạnh dưới MA200` : `MFI ${mf.toFixed(0)} < 20: dòng tiền bị rút quá mức, dễ hồi phục`);
     else if (mf > 80) sum += signal(signals, -8, `MFI ${mf.toFixed(0)} > 80: dòng tiền vào quá nóng`);
   }
   const ob = obv(bars);
@@ -505,9 +552,19 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
   const orderFlow = isIndex ? null : await getOrderFlow(symbol, bars, foreign).catch(() => null);
   // Dải dao động thống kê 5/10/20 phiên tới (lịch sử ~3 năm) để AI neo dự báo kịch bản
   const cone = isIndex ? null : await getPriceHistory(symbol, 1100).then((r) => coneSummary(r.bars)).catch(() => null);
-  // Quét rủi ro rơi tự do và mô phỏng xác suất Monte Carlo (phương pháp Laban)
+  // Quét rủi ro rơi tự do và mô phỏng xác suất Monte Carlo (phương pháp Laban kết hợp Bayesian Drift)
   const stockRisk = isIndex ? { isRisky: false, reasons: [], riskLevel: 'NORMAL' } : detectStockRisk(bars, symbol);
-  const monteCarlo = isIndex ? null : monteCarloForecast(bars, 20, 1000, { exchange: info?.exchange, isRisky: stockRisk.isRisky });
+  const trendInfo = ranking?.trend ?? (isIndex ? null : trendFeatures(bars));
+  const atr60Rough = bars.length >= 60 ? (bars.slice(-60).reduce((acc, b) => acc + (b.high - b.low), 0) / 60) : null;
+  const monteCarlo = isIndex ? null : monteCarloForecast(bars, 20, 1000, {
+    exchange: info?.exchange,
+    isRisky: stockRisk.isRisky,
+    trendState: trendInfo?.trendState,
+    marketTrend: market?.trend,
+    score: ranking?.score,
+    foreignRatio20: tech?.flow?.ratio20,
+    atrRatio: (tech?.indicators?.atr14 && atr60Rough) ? (tech.indicators.atr14 / atr60Rough) : 1.0,
+  });
   const fa = fund ? fundamentalAnalysis(fund) : { score: null, signals: [], data: null };
   const newsAgg = aggregateSentiment(newsItems);
   const newsSignals = [];
@@ -566,10 +623,18 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
   if (ind.avgVolume20 && ind.avgVolume20 < 100_000 && !isIndex) {
     warnings.push(`Thanh khoản thấp (TB20 ≈ ${ind.avgVolume20.toLocaleString('vi-VN')} cp/phiên), khó mua bán khối lượng lớn.`);
   }
-  if (ind.rsi14 != null && ind.rsi14 > 80) warnings.push('RSI trên 80: giá đang hưng phấn, không nên mua đuổi.');
+  if (ind.rsi14 != null && ind.rsi14 > 82) warnings.push('RSI trên 82: giá đang tăng nóng cực đại ngắn hạn, không nên mua đuổi.');
 
   if (stockRisk.isRisky) {
     for (const r of stockRisk.reasons) warnings.push(`[Cảnh báo rủi ro cao] ${r}`);
+  }
+  const value20 = avgTradedValue(bars);
+  const buyWarnings = isIndex ? [] : (stockRisk.buyWarnings || detectBuyWarnings(bars, value20));
+  for (const bw of buyWarnings) {
+    warnings.push(`[${bw.name}] ${bw.text} (${bw.tested})`);
+  }
+  if (tech.flow?.ratio20 != null && tech.flow.ratio20 <= -15 && tech.flow.net5 != null && tech.flow.net5 < 0) {
+    warnings.push(`[Khối ngoại xả ròng mạnh] Bán ròng ${(-tech.flow.ratio20).toFixed(1)}% GTGD 20 phiên (${Math.round(tech.flow.net5 / 1e9)} tỷ/5 phiên). Hạn chế mua đuổi.`);
   }
 
   // Khuyến nghị cũ theo tổng điểm: giữ để tham khảo và so sánh trong nhật ký dự đoán
@@ -577,24 +642,86 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
   if (flagged.length && (legacyRec.code === 'BUY' || legacyRec.code === 'ACCUMULATE')) {
     legacyRec = { ...RECOMMENDATIONS.find((r) => r.code === 'HOLD'), desc: 'Điểm số tích cực nhưng bị hạ xuống THEO DÕI do có tin rủi ro nghiêm trọng.' };
   }
-  const value20 = avgTradedValue(bars);
+  if (ind.sma200 != null && bars.at(-1).close < ind.sma200 && (legacyRec.code === 'BUY' || legacyRec.code === 'ACCUMULATE')) {
+    legacyRec = { ...RECOMMENDATIONS.find((r) => r.code === 'HOLD'), desc: 'Điểm số tích cực nhưng giá dưới MA200 (chưa thoát xu hướng giảm dài hạn): hạ xuống THEO DÕI.' };
+  }
+  if (buyWarnings.length && (legacyRec.code === 'BUY' || legacyRec.code === 'ACCUMULATE')) {
+    const primaryW = buyWarnings[0];
+    legacyRec = { ...RECOMMENDATIONS.find((r) => r.code === 'HOLD'), desc: `Điểm số tích cực nhưng kích hoạt cảnh báo [${primaryW.name}]: ${primaryW.text} (${primaryW.tested}). Khoan mua khoảng 10 phiên.` };
+  }
   const marketRegime = isIndex ? null : await getMarketRegime().catch(() => null);
   if (marketRegime && marketRegime.regime === 'MARKET_CORRECTION') {
-    warnings.push(`[Thị trường điều chỉnh] VN-Index có ${marketRegime.distDays} ngày phân phối. Chỉ để tham khảo: backtest cho thấy đứng ngoài theo tín hiệu này làm giảm lãi, quy tắc mua/giữ không đổi.`);
+    warnings.push(`[Thị trường điều chỉnh / Rủi ro] VN-Index có ${marketRegime.distDays} ngày phân phối hoặc gãy MA50. Chế độ phòng thủ: Tỷ trọng khuyến nghị 0–20% cổ phiếu, giữ 80–100% tiền mặt. Tạm hoãn mua mới.`);
+  } else if (marketRegime && marketRegime.regime === 'UPTREND_UNDER_PRESSURE') {
+    warnings.push(`[Xu hướng tăng bị áp lực] VN-Index có ${marketRegime.distDays} ngày phân phối. Tỷ trọng khuyến nghị 40–60% vốn, hạn chế mua đuổi, ưu tiên chốt lời từng phần.`);
   } else if (marketRegime && marketRegime.regime === 'UNKNOWN') {
     warnings.push(`[Thị trường chưa rõ] ${marketRegime.desc}`);
   }
+
+  const flows = isIndex ? null : await sectorP;
+  const kSector = flows?.sectors ? flows.sectors.findIndex((s) => s.stocks.some((x) => x.symbol === symbol)) : -1;
+  const sector = kSector >= 0 ? {
+    name: flows.sectors[kSector].name,
+    net: flows.sectors[kSector].net,
+    rank: kSector + 1,
+    total: flows.sectors.length,
+    period: flows.period,
+  } : null;
+
+  const lastBar = bars[bars.length - 1];
+  const prevBar = bars[bars.length - 2];
+
+  const nearResistance = tech.plan && tech.plan.resistance > lastBar.close && (tech.plan.resistance - lastBar.close) / lastBar.close < 0.02;
+  const isOverextended = (ind.rsi14 != null && ind.rsi14 > 82) || (ind.sma20 != null && lastBar.close > ind.sma20 * 1.12);
+  const isForeignDumping = tech.flow?.ratio20 != null && tech.flow.ratio20 <= -25 && tech.flow.net5 != null && tech.flow.net5 <= -200e9;
+  const hasBearishDivergence = ind.rsiDivergence === 'bearish';
+
+  if (hasBearishDivergence) {
+    warnings.push('[Phân kỳ âm RSI] Giá tạo đỉnh mới nhưng RSI đỉnh thấp hơn: động lượng suy yếu, cảnh báo rủi ro tạo đỉnh ngắn hạn.');
+  }
+  if (isOverextended) {
+    warnings.push('[Giá tăng nóng ngắn hạn] RSI > 82 hoặc giá vượt > 12% so với MA20: rủi ro điều chỉnh kỹ thuật cao, không mua đuổi.');
+  }
+  if (nearResistance) {
+    warnings.push(`[Sát ngưỡng kháng cự ${tech.plan.resistance}] Giá chỉ còn cách đỉnh cản ngắn hạn ${((tech.plan.resistance - lastBar.close) / lastBar.close * 100).toFixed(1)}%: biên lợi nhuận mỏng, rủi ro quay đầu khi chạm cản.`);
+  }
+
+  const mathTarget = (nearResistance && tech.plan.resistance > lastBar.close) ? tech.plan.resistance : tech.plan?.target;
+  const mathLevels = tech.plan ? {
+    close: lastBar.close,
+    target: mathTarget,
+    stop: tech.plan.stopLoss,
+    targetPct: (mathTarget - lastBar.close) / lastBar.close,
+    stopPct: (tech.plan.stopLoss - lastBar.close) / lastBar.close,
+  } : {
+    close: lastBar.close,
+    target: lastBar.close * 1.05,
+    stop: lastBar.close * 0.93,
+    targetPct: 0.05,
+    stopPct: -0.07,
+  };
+  const mathProb = isIndex ? null : calculateMathProbability(bars, mathLevels, monteCarlo, expectation);
 
   let rec = ranking
     ? rankRecommendation(ranking, {
         flagged: flagged.length > 0,
         losing: fa.data?.epsTTM != null && fa.data.epsTTM <= 0,
         liquid: value20 >= screenCriteria().minValue,
+        overextended: isOverextended,
+        foreignDumping: isForeignDumping,
+        bearishDivergence: hasBearishDivergence,
+        nearResistance,
         stockRisk,
+        buyWarnings,
         mc: monteCarlo,
         marketRegime,
+        sectorFlow: sector,
+        mathProb,
       })
     : legacyRec;
+  if (mathProb && !mathProb.pass && (legacyRec.code === 'BUY' || legacyRec.code === 'ACCUMULATE')) {
+    legacyRec = { ...RECOMMENDATIONS.find((r) => r.code === 'HOLD'), desc: `Điểm số tích cực nhưng bị hạ xuống THEO DÕI do không đạt tiêu chuẩn xác suất toán học (${mathProb.reasons[0] || 'Kỳ vọng âm'}).` };
+  }
   // Dữ liệu giá lỗi nghiêm trọng: không khuyến nghị mua dựa trên số liệu đó
   if (dataQuality?.critical && (rec.code === 'BUY' || rec.code === 'ACCUMULATE')) {
     rec = { ...RECOMMENDATIONS.find((r) => r.code === 'HOLD'), desc: `Tín hiệu tích cực nhưng dữ liệu chưa chuẩn (${dataQuality.issues.find((x) => x.level === 'critical').text}): chờ dữ liệu cập nhật.` };
@@ -605,8 +732,6 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
   const agree = available.filter((v) => Math.sign(v) === Math.sign(total) || Math.abs(v) < 10).length;
   const confidence = available.length ? Math.round((agree / available.length) * 100) : 0;
 
-  const lastBar = bars[bars.length - 1];
-  const prevBar = bars[bars.length - 2];
   const result = {
     symbol,
     isIndex,
@@ -633,7 +758,7 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
       aiFilter: newsFilter ? { checked: newsFilter.checked, pending: newsFilter.pending, removed: newsFilter.removed.slice(0, 10).map((x) => ({ title: x.title, reason: x.ai.reason })) } : null,
     },
     dataQuality,
-    plan: isIndex ? null : (tech.plan ? { ...tech.plan, trailing: buildDynamicTrailingPlan(bars, { entryPrice: lastBar.close, baseStop: tech.plan.stopLoss }) } : null),
+    plan: isIndex ? null : (tech.plan ? { ...tech.plan, hold: holdPlan({ entryPrice: lastBar.close }) } : null),
     market,
     marketRegime,
     // Mua bán toàn sàn HOSE trong phiên gần nhất: độ rộng và khối ngoại
@@ -646,7 +771,13 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
     ranking,
     expectation,
     stockRisk,
+    buyWarnings,
     monteCarlo,
+    mathProb,
+    isOverextended,
+    isForeignDumping,
+    hasBearishDivergence,
+    nearResistance,
     trend: ranking?.trend ?? (isIndex ? null : trendFeatures(bars)),
     trendPick: ranking?.trendPick ?? false,
     orderFlow,
@@ -656,20 +787,17 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
 
   // Tóm tắt nhanh: kết luận, việc nên làm, lý do ngắn, mức giá, rủi ro
   if (!isIndex) {
-    const flows = await sectorP;
-    const k = flows?.sectors.findIndex((s) => s.stocks.some((x) => x.symbol === symbol)) ?? -1;
-    result.sector = k >= 0 ? {
-      name: flows.sectors[k].name, net: flows.sectors[k].net, rank: k + 1, total: flows.sectors.length, period: flows.period,
-    } : null;
+    result.sector = sector;
     // Hồ sơ doanh nghiệp: KQKD 12 quý, định giá so với lịch sử và ngành, sự kiện, cổ đông lớn, khuyến nghị CTCK
     result.company = await getCompanyProfile(symbol, {
-      peers: k >= 0 ? flows.sectors[k].stocks.map((x) => x.symbol) : [],
+      peers: kSector >= 0 ? flows.sectors[kSector].stocks.map((x) => x.symbol) : [],
       financial: /ngân hàng|chứng khoán|bảo hiểm|tài chính/i.test(result.sector?.name || ''),
     }).catch(() => null);
     // Nạp khi cần để tránh vòng lặp import analyze → portfolio → backtest → analyze
-    const { getHolding, getOpenRisk } = await import('./portfolio.js');
+    const { getHolding, getOpenRisk, getCapitalInfo } = await import('./portfolio.js');
     result.holding = await getHolding(symbol, lastBar.close).catch(() => null);
-    result.brief = buildBrief(result, result.sector, result.holding, bars, await sizingContext(symbol, k >= 0 ? flows.sectors[k] : null, getOpenRisk));
+    result.capital = await getCapitalInfo().catch(() => null);
+    result.brief = buildBrief(result, result.sector, result.holding, bars, await sizingContext(symbol, kSector >= 0 ? flows.sectors[kSector] : null, getOpenRisk, result.capital));
 
     // Ghi dự đoán để tự chấm sau 5/10/20 phiên, kèm số liệu định lượng (điểm, dải giá, kế hoạch) để tính IC / độ phủ dải
     const L = result.brief?.levels;
@@ -705,17 +833,18 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
 }
 
 /**
- * Ngữ cảnh định cỡ vị thế: vốn tài khoản (ACCOUNT_CAPITAL), rủi ro đang mở của danh mục và các mã KHÁC cùng ngành đang giữ.
- * Không đọc được danh mục thì vẫn trả vốn (bỏ heat/ngành) thay vì giả định danh mục trống.
+ * Ngữ cảnh định cỡ vị thế: vốn tài khoản (NAV từ sổ tiền mặt của Danh mục, không có thì ACCOUNT_CAPITAL), tiền mặt khả dụng,
+ * rủi ro đang mở và các mã KHÁC cùng ngành đang giữ. Không đọc được danh mục thì vẫn trả vốn thay vì giả định danh mục trống.
  */
-async function sizingContext(symbol, sector, getOpenRisk) {
-  const capital = accountCapital();
+async function sizingContext(symbol, sector, getOpenRisk, cap = null) {
+  const capital = cap?.nav ?? accountCapital();
+  const available = cap?.available ?? null;
   const open = await getOpenRisk().catch(() => null);
-  if (!open) return { capital, heat: null, sector: null };
+  if (!open) return { capital, available, heat: null, sector: null };
   const others = open.filter((x) => x.symbol !== symbol);
   const peers = sector ? others.filter((x) => sector.stocks.some((s) => s.symbol === x.symbol)) : [];
   return {
-    capital,
+    capital, available,
     heat: portfolioHeat(others, capital),
     sector: sector ? { name: sector.name, count: peers.length, weight: capital ? peers.reduce((s, x) => s + x.value, 0) / capital : null } : null,
   };

@@ -389,6 +389,8 @@ function buildPrompt(a) {
       lines.push('Người đang giữ: ' + b.steps.hold.map(step).join(' | '));
     }
   }
+  const cap = capitalLine(a.capital);
+  if (cap) lines.push(cap);
   lines.push('\nHãy phân tích và trả về JSON theo schema.');
   return lines.join('\n');
 }
@@ -536,6 +538,14 @@ export function aiAnalyze(analysis, { force = false } = {}) {
 
 export { buildPrompt };
 
+/** Vốn của nhà đầu tư (Danh mục): để AI không đề xuất mua vượt tiền mặt và đúng một suất. */
+export function capitalLine(c) {
+  if (!c?.nav) return '';
+  const tr = (v) => `${Math.round(v / 1e6).toLocaleString('vi-VN')} triệu`;
+  return `\n## Vốn của nhà đầu tư\nTổng tài sản ${tr(c.nav)}${c.available != null ? `, tiền mặt dùng được ${tr(c.available)}` : ''}; quy tắc: tối đa ${c.slots} mã, `
+    + `một suất ≈ ${c.slotValue ? tr(c.slotValue) : '–'}, đang giữ ${c.picks} mã (còn ${c.freeSlots} suất). Không đề xuất mua quá một suất hay quá tiền mặt đang có.`;
+}
+
 // ---------- Xếp hạng cổ phiếu tiềm năng (một lần gọi cho cả danh sách) ----------
 export const PICK_VERDICTS = { MUA: 'MUA', MUA_THAM_DO: 'MUA THĂM DÒ', CHO_DIEM_MUA: 'CHỜ ĐIỂM MUA', LOAI: 'LOẠI' };
 
@@ -614,6 +624,8 @@ function pickPrompt(cands, marketFlow, market) {
     L.push(`P/E ${f.pe?.toFixed?.(1) ?? 'n/a'}, P/B ${f.pb?.toFixed?.(2) ?? 'n/a'}, ROE ${f.roe != null ? (f.roe * 100).toFixed(1) + '%' : 'n/a'}, LN 4Q ${f.profitGrowthTTM != null ? (f.profitGrowthTTM * 100).toFixed(0) + '%' : 'n/a'}, DT 4Q ${f.revenueGrowthTTM != null ? (f.revenueGrowthTTM * 100).toFixed(0) + '%' : 'n/a'}`);
     if (c.foreign) L.push(`Khối ngoại: 5 phiên ${(c.foreign.net5 / 1e9).toFixed(1)} tỷ, 20 phiên ${(c.foreign.net20 / 1e9).toFixed(1)} tỷ`);
     if (c.plan) L.push(`Hỗ trợ ${c.plan.support}, kháng cự ${c.plan.resistance}, ATR ${c.plan.atr}`);
+    if (c.mathProb) L.push(`Xác suất & Kỳ vọng toán học: EV ${c.mathProb.ev}%, Kelly ${c.mathProb.kelly}, Tỷ lệ thắng ${Math.round(c.mathProb.pWin * 100)}%, Hòa vốn ${Math.round(c.mathProb.breakEven * 100)}% → ${c.mathProb.pass ? 'ĐẠT' : 'KHÔNG ĐẠT (' + c.mathProb.note + ')'}`);
+    if (c.warnings?.length) L.push(`CẢNH BÁO RỦI RO: ${c.warnings.join('; ')}`);
     const ex = c.expectation?.h20;
     if (ex) L.push(`Thống kê lịch sử nhóm điểm ${c.expectation.bucket.from}–${c.expectation.bucket.to} ${c.expectation.bucket.aboveMa200 ? 'trên' : 'dưới'} MA200 (4 năm): sau 20 phiên hơn rổ TB ${(ex.meanExcess * 100).toFixed(1)}%, p10 ${(ex.p10 * 100).toFixed(1)}%, p90 ${(ex.p90 * 100).toFixed(1)}%, thắng rổ ${Math.round(ex.pBeat * 100)}%, lãi tuyệt đối TB ${(ex.meanReturn * 100).toFixed(1)}%${ex.significant ? '' : ' (chưa có ý nghĩa thống kê)'}`);
     for (const n of (c.news || []).slice(0, 4)) L.push(`- Tin [${n.label}${n.reaction ? `, giá ${n.reaction.pct}%` : ''}]: ${n.title}`);

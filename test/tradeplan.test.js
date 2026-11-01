@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { priceLevels, tradeSteps, splitShares, tick } from '../src/tradeplan.js';
+import { priceLevels, tradeSteps, splitShares, tick, holdPlan } from '../src/tradeplan.js';
 
 const day = (i) => new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10);
 // Chuỗi dao động quanh xu hướng tăng: có đỉnh/đáy rõ
@@ -50,4 +50,20 @@ test('Đang nắm giữ: giữ đến hạn 40 phiên, đến hạn mà rời nh
   // Đã dưới ngưỡng cảnh báo: nhắc lên đầu, không bình quân giá xuống
   const t2 = tradeSteps('HOLD', { ...L, close: 19 }, { holding: { qty: 500, avgCost: 23 }, holdStop: 19.55 });
   assert.match(t2.hold[0].condition, /dưới ngưỡng cảnh báo 19,55/);
+});
+
+test('holdPlan: một ngưỡng thoát −15% theo giá vốn, không nâng khi đang lãi, xem lại sau 40 phiên', () => {
+  const flat = holdPlan({ entryPrice: 20, currentPrice: 20.4 });
+  assert.equal(flat.warnStop, 17);
+  assert.equal(flat.belowWarn, false);
+  assert.equal(flat.reviewAfter, 40);
+  // Lãi 20%: ngưỡng KHÔNG dời lên hòa vốn / khóa lãi (bộ đo: các cách đó làm lãi giảm)
+  const win = holdPlan({ entryPrice: 20, currentPrice: 24, heldSessions: 12 });
+  assert.equal(win.warnStop, 17);
+  assert.equal(win.pnlPct, 20);
+  assert.equal(win.reviewDue, false);
+  assert.equal(holdPlan({ entryPrice: 20, currentPrice: 16.9 }).belowWarn, true);
+  assert.equal(holdPlan({ entryPrice: 20, heldSessions: 40 }).reviewDue, true);
+  assert.equal(holdPlan({}), null);
+  assert.match(win.label, /không chốt lời theo mốc/);
 });

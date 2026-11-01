@@ -4,6 +4,9 @@
 //  - biến động thấp (ATR%), - độ mạnh xu hướng (ADX).
 // Đây là các yếu tố giữ được khả năng dự báo ở cả giai đoạn học và giai đoạn kiểm tra ngoài mẫu
 // khi đánh giá trên dữ liệu 2023–2026 (điểm kỹ thuật cũ thì không). Điểm 0–100 = phân vị trung bình trong rổ.
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getPriceHistory, getScreenUniverse, getUniverseAt, screenCriteria, avgTradedValue, DELIST_HAIRCUT, DELIST_GAP } from './data.js';
 import { cached } from './http.js';
 import { atr, adx, sma } from './indicators.js';
@@ -264,16 +267,32 @@ export function getRankBoard() {
       if (f) rows.push({ symbol: uni[k].symbol, exchange: uni[k].exchange, f, f6: avoidInputs(f, bars), trend, value20, date: bars.at(-1).time, changePct: round((bars.at(-1).close / bars.at(-2).close - 1) * 100) });
     });
     const ref = buildRef(rows.map((r) => r.f));
+let stockMetaCache = null;
+function getStockMeta() {
+  if (!stockMetaCache) {
+    try {
+      const file = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'stock_names.json');
+      stockMetaCache = JSON.parse(readFileSync(file, 'utf8'));
+    } catch {
+      stockMetaCache = {};
+    }
+  }
+  return stockMetaCache;
+}
+
     // ⛔: điểm 6 yếu tố và ngưỡng 10% thấp nhất của rổ
     const ref6 = buildRef(rows.map((r) => r.f6), AVOID_FACTORS);
     const s6 = rows.map((r) => compositeScore(r.f6, ref6, AVOID_FACTORS)?.score ?? null);
     const sorted6 = s6.filter((v) => v != null).sort((a, b) => a - b);
     const avoidCut = sorted6.length ? sorted6[Math.max(0, Math.ceil(sorted6.length * AVOID_PCT) - 1)] : null;
     rows.forEach((r, k) => { r.score6 = s6[k]; });
+    const metaMap = getStockMeta();
     const board = rows.map((r) => {
       const cs = compositeScore(r.f, ref);
+      const m = metaMap[r.symbol] || {};
       return {
         symbol: r.symbol, exchange: r.exchange, close: r.f.close, changePct: r.changePct, date: r.date, value20: Math.round(r.value20),
+        companyName: m.name || '', shortName: m.short_name || '', sector: m.sector || '',
         score: cs?.score ?? null, parts: cs?.parts ?? null, aboveMa200: r.f.aboveMa200, trend: r.trend,
         factors: { mom: round(r.f.mom, 4), high: round(r.f.high, 4), atr: round(r.f.atr, 4), adx: round(r.f.adx, 1) },
         score6: r.score6, avoid: r.score6 != null && avoidCut != null && r.score6 <= avoidCut,

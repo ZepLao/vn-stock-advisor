@@ -61,4 +61,10 @@ test('Mã rác: lỗ, ROE thấp, nợ cao, penny kém, thiếu số liệu, tha
   assert.equal(junkCheck(stock(good, { recentBars: thin })).junk, true);
   const pinned = bars.map((b) => ({ ...b, close: 48, high: 48.1, low: 47.8 })); // NAF 10/2026: biên độ 0,6%/20 phiên
   assert.match(junkCheck(stock(good, { recentBars: pinned })).reasons[0], /bị ghim/);
+  const dumped = stock(good, { technical: { flow: { ratio20: -18, net5: -25e9 } } });
+  assert.equal(junkCheck(dumped).junk, true);
+  assert.match(junkCheck(dumped).reasons[0], /khối ngoại xả ròng mạnh/);
+  const falling = stock(good, { stockRisk: { isRisky: true, reasons: ['Rơi tự do 5 phiên (-14%)'] } });
+  assert.equal(junkCheck(falling).junk, true);
+  assert.match(junkCheck(falling).reasons[0], /rủi ro cao/);
 });

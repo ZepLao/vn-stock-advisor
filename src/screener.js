@@ -13,7 +13,8 @@ import { aiPickStocks } from './ai.js';
 import { rankSymbol } from './ranking.js';
 import { recordMany } from './predictions.js';
 import { getSectorFlows } from './sectors.js';
-import { detectStockRisk } from './risk.js';
+import { detectStockRisk, detectBuyWarnings } from './risk.js';
+import { getMarketRegime } from './regime.js';
 import { sma } from './indicators.js';
 
 // ---------- Tiêu chí "cổ ngon" (cơ bản doanh nghiệp) và thanh khoản đều ----------
@@ -62,11 +63,13 @@ export function qualityCheck(f, sectorName = '') {
  */
 export function sectorCheck(s, { top = SECTOR_RULES.top, period = SECTOR_RULES.period } = {}) {
   if (!s) return { pass: false, label: 'Chưa xác định được ngành' };
-  const inTop = s.rank <= top, buying = s.net > 0;
+  const bleeding = (s.rank > s.total - 3 && s.net < 0) || s.net <= -500e9;
+  const inTop = s.rank <= top && !bleeding;
+  const buying = s.net > 0 && !bleeding;
   const tỷ = `${s.net >= 0 ? '+' : ''}${(s.net / 1e9).toFixed(0)} tỷ`;
   return {
-    pass: inTop || buying,
-    label: `Ngành ${s.name}: ${buying ? 'đang được mua ròng' : 'bị bán ròng'} ${tỷ} (${period} phiên), hạng ${s.rank}/${s.total}${inTop ? ` — top ${top} ngành` : ''}`,
+    pass: !bleeding && (inTop || buying),
+    label: `Ngành ${s.name}: ${s.net >= 0 ? 'đang được mua ròng' : 'bị bán ròng'} ${tỷ} (${period} phiên), hạng ${s.rank}/${s.total}${inTop ? ` — top ${top} ngành` : ''}${bleeding ? ' (ngành bị rút ròng mạnh, loại)' : ''}`,
   };
 }
 
@@ -270,7 +273,8 @@ async function quickScan(item, ctx) {
 
   const setups = detectSetups({ close, changePct, i, plan: tech.plan, faScore: fa.score ?? 0, flow: tech.flow, vcp, pocketPivot });
   // Quét nhanh rủi ro rơi tự do / thủng sâu MA50 (phương pháp Laban)
-  const stockRisk = detectStockRisk(bars, item.symbol);
+  const stockRisk = detectStockRisk(bars, item.symbol, avgValue20);
+  const buyWarnings = stockRisk.buyWarnings || detectBuyWarnings(bars, avgValue20);
   // Tiêu chí chính: điểm xếp hạng 4 yếu tố (đã kiểm chứng). Chỉ nhóm ≥ 70 và trên MA200 thắng VN-Index ổn định,
   // nên chỉ những mã đó được đưa vào vòng phân tích sâu. Điểm kỹ thuật/cơ bản cũ chỉ để hiển thị.
   const rank = await rankSymbol(item.symbol, bars).catch(() => null);
@@ -280,6 +284,7 @@ async function quickScan(item, ctx) {
     quick: Math.round(quick), technical: tech.score, fundamental: fa.score, setups, avgValue20,
     rankScore: rank?.score ?? null, aboveMa200: rank?.aboveMa200 ?? null,
     stockRisk,
+    buyWarnings,
     trendPick: rank?.trendPick ?? false,
     vcp,
     pocketPivot,
@@ -363,6 +368,7 @@ async function run() {
   const { bars: indexBars } = await getPriceHistory('VNINDEX');
   const date = indexBars.at(-1).time;
   const market = await marketContext().catch(() => null);
+  const marketRegime = await getMarketRegime().catch(() => null);
   const flows = await getSectorFlows(SECTOR_RULES.period).catch(() => null);
   const sectorOf = new Map();
   (flows?.sectors || []).forEach((s, k) => {
@@ -377,8 +383,9 @@ async function run() {
   const scanned = await pool(uni, (it) => quickScan(it, ctx), () => state.progress.done++);
 
   // Bước 2
-  // Bắt buộc: thanh khoản đều + cổ ngon + xu hướng (điểm xếp hạng ≥ 70, trên MA200) + KHÔNG có rủi ro rơi tự do
-  const trendOk = (c) => c.quick != null && c.quick >= 70 && c.aboveMa200 !== false && !c.stockRisk?.isRisky;
+  // Bắt buộc: thanh khoản đều + cổ ngon + xu hướng (điểm xếp hạng ≥ 70, trên MA200) + KHÔNG có rủi ro rơi tự do + KHÔNG dính cảnh báo Khoan mua (SSL / Weak)
+  const hasBuyWarning = (c) => Boolean(c.buyWarnings?.length);
+  const trendOk = (c) => c.quick != null && c.quick >= 70 && c.aboveMa200 !== false && !c.stockRisk?.isRisky && !hasBuyWarning(c);
   const funnel = {
     scanned: scanned.length,
     liquidity: scanned.filter((c) => c.liquidity.pass).length,
@@ -386,16 +393,51 @@ async function run() {
     sector: scanned.filter((c) => c.liquidity.pass && c.quality.pass && c.sector.pass).length,
     trend: scanned.filter((c) => c.liquidity.pass && c.quality.pass && c.sector.pass && trendOk(c)).length,
   };
-  const shortlist = scanned
+  let shortlist = scanned
     .filter((c) => c.liquidity.pass && c.quality.pass && c.sector.pass && trendOk(c))
     .sort((a, b) => (b.combined + (b.trendPick ? 5 : 0)) - (a.combined + (a.trendPick ? 5 : 0)))
     .slice(0, STAGE2_SIZE);
+
+  let isCounterTrend = false;
+  let isDeepDipMode = false;
+  let regimeNote = null;
+  if (!shortlist.length) {
+    if (marketRegime?.isDeepDip) {
+      // Khi thị trường giảm sâu ≥ 15% từ đỉnh 1 năm (nghiên cứu Laban: Quality Deep Dip):
+      // Kích hoạt gom hàng giá trị các mã cơ bản chất lượng cao (ROE ≥ 12%, nợ thấp) đón đầu phục hồi
+      const deepDipList = scanned
+        .filter((c) => c.liquidity.pass && c.quality.pass && !c.stockRisk?.isRisky && !hasBuyWarning(c))
+        .sort((a, b) => (b.quality.score ?? 0) - (a.quality.score ?? 0))
+        .slice(0, STAGE2_SIZE);
+      if (deepDipList.length > 0) {
+        shortlist = deepDipList;
+        isDeepDipMode = true;
+        regimeNote = `VN-Index chiết khấu sâu ${Math.abs(marketRegime.from1yHighPct).toFixed(1)}% từ đỉnh 1 năm (vùng hoảng loạn). Kích hoạt chế độ Gom hàng giá trị (Quality Deep Dip) cho các doanh nghiệp đầu ngành (ROE ≥ 12%, nợ an toàn).`;
+      }
+    }
+
+    if (!shortlist.length) {
+      // Khi thị trường phân phối/rút ròng toàn diện khiến phễu ngành = 0:
+      // Tự động kích hoạt cơ chế chọn lọc Cổ phiếu ngược dòng / Phòng thủ (sức mạnh riêng lẻ tốt nhất)
+      const counterList = scanned
+        .filter((c) => c.liquidity.pass && c.quality.pass && trendOk(c))
+        .sort((a, b) => (b.combined + (b.trendPick ? 5 : 0)) - (a.combined + (a.trendPick ? 5 : 0)))
+        .slice(0, STAGE2_SIZE);
+      if (counterList.length > 0) {
+        shortlist = counterList;
+        isCounterTrend = true;
+        regimeNote = 'Thị trường chung đang bị rút ròng diện rộng. Hệ thống chuyển sang chế độ Cổ phiếu ngược dòng / Phòng thủ (chỉ thăm dò ≤ 15% vốn).';
+      }
+    }
+  }
   state.progress = { stage: 2, label: 'Phân tích sâu nhóm dẫn đầu (kèm tin tức)', done: 0, total: shortlist.length };
   let marketFlow = null;
   const detailed = await pool(shortlist, async (c) => {
     const a = await analyzeSymbol(c.symbol, { withChart: false });
     marketFlow ??= a.marketFlow;
     if (a.recommendation.code === 'SELL' || a.recommendation.code === 'AVOID') return null;
+    if (a.recommendation.code === 'HOLD' && (a.mathProb && !a.mathProb.pass)) return null;
+    if (a.recommendation.code === 'HOLD' && (a.isOverextended || a.hasBearishDivergence || a.nearResistance || a.isForeignDumping || a.buyWarnings?.length)) return null;
     if (a.warnings.some((w) => RISK_WARNING.test(w))) return null;
     return {
       symbol: a.symbol, name: a.info.name, exchange: a.info.exchange,
@@ -404,6 +446,8 @@ async function run() {
       liquidity: c.liquidity, quality: withEarnings(qualityCheck(a.fundamental.data, c.sector?.name || ''), a.company?.earnings), sector: c.sector, combined: c.combined,
       trendPick: a.trendPick ?? c.trendPick ?? false,
       stockRisk: a.stockRisk ?? c.stockRisk ?? null,
+      buyWarnings: a.buyWarnings ?? c.buyWarnings ?? [],
+      mathProb: a.mathProb ? { pass: a.mathProb.pass, pWin: a.mathProb.pWin, ev: a.mathProb.expectedValuePct, kelly: a.mathProb.halfKelly, breakEven: a.mathProb.breakEvenWinRate, note: a.mathProb.summaryNote } : null,
       monteCarlo: a.monteCarlo ? { probUp: a.monteCarlo.probUp, rr: a.monteCarlo.rr, signal: a.monteCarlo.signal, peakGain: a.monteCarlo.peakGainMedian, troughDd: a.monteCarlo.troughDdMedian } : null,
       earnings: a.company?.earnings ? (({ quarters, ...rest }) => ({ ...rest, quarters: quarters.slice(-5).map(({ label, profit, profitYoY, revenueYoY }) => ({ label, profit, profitYoY, revenueYoY })) }))(a.company.earnings) : null,
       valuation: a.company?.valuation ? { verdict: a.company.valuation.verdict, pePct: a.company.valuation.pe?.percentile ?? null, peMedian: a.company.valuation.pe?.median ?? null } : null,
@@ -421,6 +465,7 @@ async function run() {
 
   const final = detailed
     .filter((c) => c.quality.pass)
+    .map((c) => ({ ...c, isCounterTrend, isDeepDipMode }))
     .sort((a, b) => ((b.combined ?? 0) + (b.trendPick ? 5 : 0)) - ((a.combined ?? 0) + (a.trendPick ? 5 : 0)))
     .slice(0, FINAL_SIZE);
   // Chỉ ghi phễu khi nến đã chốt (quét tay trong phiên thì bỏ, tránh chấm trên giá chưa chốt)
@@ -454,6 +499,7 @@ async function run() {
     sectorPicks: sectorPicks(scanned, flows, new Set(final.map((c) => c.symbol)), trendOk),
     universe: uni.length, scanned: scanned.length, shortlisted: shortlist.length,
     market, marketFlow, setupCounts, candidates: final, ai,
+    isCounterTrend, isDeepDipMode, regimeNote,
   };
 }
 

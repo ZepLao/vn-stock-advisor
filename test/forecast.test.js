@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { futureDates, priceCone, validateCone, pnl } from '../src/forecast.js';
+import { futureDates, priceCone, validateCone, pnl, monteCarloForecast } from '../src/forecast.js';
 
 // Chuỗi giá ngẫu nhiên có hạt giống cố định (biến động ~2%/phiên)
 function randomBars(n, seed = 7) {
@@ -41,4 +41,27 @@ test('Lời/lỗ: lô 100, trừ phí mua, phí bán và thuế bán', () => {
   const cost = 1900 * 50000 * 1.0015, back = 1900 * 55000 * (1 - 0.0015 - 0.001);
   assert.equal(r.pnl, Math.round(back - cost));
   assert.ok(pnl(100e6, 50, 50).pnl < 0); // giá đứng yên vẫn lỗ phí
+});
+
+test('monteCarloForecast: Bayesian Conditioned Drift phân hóa rõ rệt mã Uptrend vs Downtrend', () => {
+  const bars = randomBars(300, 42);
+  const up = monteCarloForecast(bars, 20, 500, {
+    trendState: 'UP',
+    score: 85,
+    marketTrend: 'up',
+    foreignRatio20: 15,
+    seed: 12345,
+  });
+  const down = monteCarloForecast(bars, 20, 500, {
+    trendState: 'DOWN',
+    score: 30,
+    marketTrend: 'down',
+    foreignRatio20: -15,
+    seed: 12345,
+  });
+
+  assert.ok(up.dailyDriftPct > 0, 'Uptrend mã khỏe phải có dailyDrift dương');
+  assert.ok(down.dailyDriftPct < 0, 'Downtrend mã yếu phải có dailyDrift âm');
+  assert.ok(up.probUp > down.probUp, `Xác suất tăng của mã khỏe (${up.probUp}) phải vượt trội mã yếu (${down.probUp})`);
+  assert.ok(up.finalRetMedian > down.finalRetMedian, 'Lợi nhuận trung vị mã khỏe phải lớn hơn mã yếu');
 });

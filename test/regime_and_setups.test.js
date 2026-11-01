@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { countDistributionDays, calculateMarketBreadth, evaluateMarketRegime, REGIMES } from '../src/regime.js';
-import { chandelierExit, buildDynamicTrailingPlan } from '../src/tradeplan.js';
+import { chandelierExit } from '../src/tradeplan.js';
 import { detectVcpPattern, detectPocketPivot } from '../src/screener.js';
 import { monteCarloForecast } from '../src/forecast.js';
 
@@ -43,11 +43,11 @@ test('calculateMarketBreadth & evaluateMarketRegime: phân loại đúng trạng
   const breadthBad = { total: 20, pctAboveMa20: 20, pctAboveMa50: 15 };
   const regimeBad = evaluateMarketRegime(badBars, breadthBad);
   assert.equal(regimeBad.regime, REGIMES.MARKET_CORRECTION.code);
-  // Điều chỉnh chỉ để thông tin (backtest: chặn mua làm giảm lãi); chặn mua chỉ khi thiếu dữ liệu (UNKNOWN)
-  assert.equal(regimeBad.allowNewBuys, true);
+  // Thị trường điều chỉnh: quản trị rủi ro tối đa, phòng thủ tiền mặt, tạm ngừng mở vị thế mua mới (fail-safe)
+  assert.equal(regimeBad.allowNewBuys, false);
 });
 
-test('chandelierExit & buildDynamicTrailingPlan: tính đúng chặn lãi động và dời điểm hòa vốn', () => {
+test('chandelierExit: mức Chandelier nằm dưới đỉnh gần nhất', () => {
   const bars = Array.from({ length: 30 }, (_, i) => ({
     time: `2026-01-${String(i + 1).padStart(2, '0')}`,
     open: 50 + i * 0.5,
@@ -60,15 +60,6 @@ test('chandelierExit & buildDynamicTrailingPlan: tính đúng chặn lãi độn
   const chan = chandelierExit(bars, 22, 2.5);
   assert.ok(chan != null && chan > 0);
   assert.ok(chan < bars.at(-1).high);
-
-  // Kiểm tra dời stop hòa vốn khi lãi >= 6%
-  const entry = 50;
-  const cur = 55; // lãi 10%
-  const plan = buildDynamicTrailingPlan(bars, { entryPrice: entry, currentPrice: cur, baseStop: 46 });
-  assert.equal(plan.isBreakevenActive, true);
-  assert.ok(plan.breakevenStop > entry);
-  assert.ok(plan.effectiveStop >= plan.breakevenStop);
-  assert.equal(plan.stages.tp1, 53.5); // 50 * 1.07 làm tròn
 });
 
 test('detectVcpPattern: nhận diện chính xác mẫu hình co hẹp biến động và cạn vol', () => {

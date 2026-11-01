@@ -26,6 +26,7 @@ export const SOURCES = {
   rule: 'Khuyến nghị hệ thống (mã đã xem)',
   rank: 'Điểm xếp hạng (mã đã xem)',
   rank_top: 'Top 8 bảng xếp hạng',
+  buyable: '🎯 Có thể mua — Điểm mua đạt chuẩn phiên (4 yếu tố + MA200)',
   trend_pick: 'Xu hướng chuẩn — Trend Pick (8 năm nghiên cứu)',
   monte_carlo: 'Tín hiệu rủi ro Monte Carlo',
   ai: 'Gemini phân tích',
@@ -231,7 +232,7 @@ export function scoreItem(item, bars, indexBars, basket = null) {
  * @returns {Promise<{ scored: object[], late: Record<string, number>, bars: Record<string, object[]|null>, index: object[] }>}
  */
 export function scoredPredictions() {
-  return cached('pred-scored', 10 * 60_000, async () => {
+  return cached('pred-scored', 30 * 60_000, async () => {
     await load();
     const indexRes = await getPriceHistory('VNINDEX').catch(() => null);
     const idx = indexRes?.bars || [];

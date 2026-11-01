@@ -7,11 +7,12 @@
   "scripts": {
     "start": "node server.js",
     "scan": "node scan.js",
-    "test": "node --test",
+    "test": "node --test test/*.test.js",
     "ai-check": "node check-ai.js",
     "telegram": "node telegram-setup.js",
     "db-sync": "node db-sync.js",
-    "self-review": "node self-review.js"
+    "self-review": "node self-review.js",
+    "evaluate": "node evaluate.js"
   },
   "engines": {
     "node": ">=20"

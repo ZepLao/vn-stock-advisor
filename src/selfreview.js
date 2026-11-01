@@ -192,9 +192,12 @@ export function proposeChanges({ picks, picks10, rejected10, band }, tests, t, r
     out.push({ name: 'aiVeto', value: true, evidence: { picks10, rejected10 },
       reason: `Mã AI chọn tốt hơn mã AI loại ${((picks10.avgExcess10 - rejected10.avgExcess10) * 100).toFixed(1)}%/10 phiên: bật lại quyền loại mã của AI` });
   }
-  if (!t.caution && picks10.n >= rules.minSample && picks10.avgExcess10 < -0.01) {
-    out.push({ name: 'caution', value: true, evidence: picks10,
-      reason: `Gợi ý mua gần đây thua VN-Index ${(-picks10.avgExcess10 * 100).toFixed(1)}%/10 phiên: chỉ gợi ý 3 mã, kèm cảnh báo` });
+  const picksFail = picks.n >= 10 && (picks.stopRate >= 0.5 || picks.winRate < 0.4 || (picks.avgRet != null && picks.avgRet < -0.015));
+  if (!t.caution && (picksFail || (picks10.n >= rules.minSample && picks10.avgExcess10 < -0.01))) {
+    out.push({ name: 'caution', value: true, evidence: { picks, picks10 },
+      reason: picksFail
+        ? `Tỷ lệ cắt lỗ ${Math.round((picks.stopRate || 0) * 100)}% và thắng ${Math.round((picks.winRate || 0) * 100)}% (trên ${picks.n} lệnh): bật ngay chế độ thận trọng (giảm số mã, tăng cảnh báo rủi ro).`
+        : `Gợi ý mua gần đây thua VN-Index ${(-picks10.avgExcess10 * 100).toFixed(1)}%/10 phiên: chỉ gợi ý 3 mã, kèm cảnh báo` });
   } else if (t.caution && ok(tests.picks, 1)) {
     out.push({ name: 'caution', value: false, evidence: { picks10, test: ev(tests.picks) },
       reason: `Gợi ý mua vượt VN-Index +${(tests.picks.mean * 100).toFixed(1)}%/10 phiên có ý nghĩa (t ${tests.picks.t}, ${tests.picks.n} phiên): bỏ chế độ thận trọng` });

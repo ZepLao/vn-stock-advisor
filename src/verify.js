@@ -245,7 +245,7 @@ export function filterTests(scored, R = VERIFY_RULES) {
   if (!funnel.length) return [];
   const setupIds = [...new Set(funnel.flatMap((x) => x.flags.setups || []))];
   const flags = [
-    ['liquidity', 'Thanh khoản đều'], ['quality', 'Cổ ngon (cơ bản)'], ['sector', 'Ngành được mua ròng 5 phiên'],
+    ['liquidity', 'Thanh khoản đều'], ['quality', 'Cơ bản tốt (BCTC)'], ['sector', 'Ngành được mua ròng 5 phiên'],
     ['trend', 'Xu hướng (≥ 70, trên MA200, không rủi ro)'], ['risk', 'Bị cờ rủi ro rơi tự do'], ['trendPick', 'Trend Pick'],
     ['final', 'Vào danh sách cuối'], ...setupIds.map((id) => [`setup:${id}`, `Setup ${id}`]),
   ];
