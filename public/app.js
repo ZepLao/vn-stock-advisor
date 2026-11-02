@@ -955,6 +955,8 @@ async function analyze(symbol) {
   $('rank-btn')?.classList.remove('on');
   $('sectorview').hidden = true;
   $('sector-btn')?.classList.remove('on');
+  $('autoview').hidden = true;
+  $('auto-btn')?.classList.remove('on');
   $('loading').hidden = false;
   $('loading-msg').textContent = `Đang phân tích ${symbol}…`;
   history.replaceState(null, '', `#${symbol}`);
@@ -1763,7 +1765,8 @@ function applyAiToDecision(a, ai) {
 const PICK_TONE = { MUA: 'up', MUA_THAM_DO: 'up', CHO_DIEM_MUA: 'ref', LOAI: 'down' };
 
 function showPicks() {
-  ['empty', 'error', 'report', 'loading', 'portfolio', 'rankview', 'sectorview'].forEach((id) => ($(id).hidden = true));
+  ['empty', 'error', 'report', 'loading', 'portfolio', 'rankview', 'sectorview', 'autoview'].forEach((id) => ($(id).hidden = true));
+  $('auto-btn')?.classList.remove('on');
   markMobileView('picks', 'picks');
   $('sector-btn')?.classList.remove('on');
   $('pf-btn')?.classList.remove('on');
@@ -2688,7 +2691,8 @@ $('cm-btn')?.addEventListener('click', () => state.current && runAiFor(state.cur
 
 // ---------- Danh mục đầu tư ----------
 function showPortfolio() {
-  ['empty', 'error', 'report', 'loading', 'picks', 'rankview', 'sectorview'].forEach((id) => ($(id).hidden = true));
+  ['empty', 'error', 'report', 'loading', 'picks', 'rankview', 'sectorview', 'autoview'].forEach((id) => ($(id).hidden = true));
+  $('auto-btn')?.classList.remove('on');
   markMobileView('analyze', 'more');
   $('sector-btn')?.classList.remove('on');
   $('picks-btn')?.classList.remove('on');
@@ -2696,8 +2700,8 @@ function showPortfolio() {
   $('portfolio').hidden = false;
   $('pf-btn')?.classList.add('on');
   history.replaceState(null, '', '#danh-muc');
-  const form = $('pf-form');
-  if (!form.date.value) form.date.value = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  for (const form of [$('pf-form'), $('pf-cash-form')]) if (form && !form.date.value) form.date.value = today;
   loadPortfolio();
 }
 
@@ -2770,6 +2774,21 @@ function renderPortfolio(p) {
         <td class="${dirClass(c.pnl)}">${fmtBig(c.pnl)}</td><td class="${dirClass(c.returnPct)}">${signed(c.returnPct)}%</td><td>${c.holdDays ?? '–'} ngày</td></tr>`).join('')}
     </tbody></table></div>` : ''}</section>` : '';
 
+  // Sổ tiền mặt: nạp / rút / cổ tức và tiền mua / bán, số dư sau mỗi dòng; dòng tiền nhập tay xóa được
+  const cap = p.capital || {};
+  $('pf-cash-sub').innerHTML = cap.cash != null
+    ? `Tiền mặt hiện có <b>${vnd(cap.cash)}</b>${cap.available != null && cap.available !== cap.cash ? ` (rút được ${vnd(cap.available)}, chờ về ${vnd(cap.pendingSale)})` : ''} · vốn thực nạp ròng <b>${vnd(cap.netContributed)}</b>`
+    : 'Chưa có dòng tiền nào: ghi khoản nạp đầu tiên để tool tính đúng tiền mặt và vốn thực nạp ròng.';
+  const cashRows = (p.cashHistory || []).map((c) => `<tr>
+      <td>${c.date.split('-').reverse().join('/')}</td>
+      <td style="font-family:inherit">${esc(c.label)}</td>
+      <td class="${dirClass(c.delta)}">${c.delta >= 0 ? '+' : ''}${vnd(c.delta)}</td>
+      <td>${vnd(c.balance)}</td>
+      <td class="muted small" style="font-family:inherit">${esc(c.note)}</td>
+      <td>${c.kind === 'cash' ? `<button type="button" class="btn btn-glass btn-xs" data-del-cash="${esc(c.id)}" title="Xóa dòng tiền">✕</button>` : ''}</td></tr>`).join('');
+  const cashCard = cashRows ? `<section class="card"><div class="card-head"><div><h3>📒 Sổ tiền mặt</h3><div class="muted small">Mới nhất trước. Dòng mua / bán xóa ở Nhật ký lệnh.</div></div><span class="badge-subtle">${p.cashHistory.length} dòng</span></div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ngày</th><th>Loại</th><th>Số tiền</th><th>Số dư sau</th><th>Ghi chú</th><th></th></tr></thead><tbody>${cashRows}</tbody></table></div></section>` : '';
+
   $('pf-sub').textContent = `${s.positions} mã đang nắm giữ · cập nhật ${new Date(p.updatedAt).toLocaleTimeString('vi-VN')}`;
   $('pf-body').innerHTML = `
     <section class="card"><div class="ai-levels" style="margin:0">
@@ -2782,8 +2801,37 @@ function renderPortfolio(p) {
     ${renderCapitalOverview(p)}
     ${renderPortfolioHeat(p)}
     <section class="card"><div class="card-head"><h3>📊 Vị thế đang nắm giữ</h3></div>${holdings}</section>
-    ${riskCard}${behaviorCard}${txs}`;
+    ${riskCard}${behaviorCard}${txs}${cashCard}`;
 }
+
+/** "5tr", "1,5 triệu", "500k", "2 tỷ", "5.000.000" → số đồng; null nếu không đọc được. */
+function parseMoney(text) {
+  const t = String(text || '').trim().toLowerCase().replace(/\s+/g, '');
+  const m = /^([\d.,]+)(tr|triệu|trieu|m|k|nghìn|nghin|ngàn|ngan|tỷ|ty|b)?đ?$/.exec(t);
+  if (!m) return null;
+  const unit = { tr: 1e6, 'triệu': 1e6, trieu: 1e6, m: 1e6, k: 1e3, 'nghìn': 1e3, nghin: 1e3, 'ngàn': 1e3, ngan: 1e3, 'tỷ': 1e9, ty: 1e9, b: 1e9 }[m[2]] || 1;
+  // Có đơn vị: dấu , hoặc . là phần thập phân ("1,5tr"); không đơn vị: dấu . , là phân cách hàng nghìn ("5.000.000")
+  const n = unit > 1 ? Number(m[1].replace(',', '.')) : Number(m[1].replace(/[.,]/g, ''));
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * unit) : null;
+}
+
+$('pf-cash-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const amount = parseMoney(f.amount.value);
+  if (amount == null || (amount <= 0 && f.type.value !== 'SET')) { showToast('Số tiền không hợp lệ: nhập như 5tr, 500k hoặc 5.000.000', 'error', 5000); return; }
+  const label = f.type.selectedOptions[0].textContent;
+  if (!confirm(`${label} ${vnd(amount)} ngày ${f.date.value.split('-').reverse().join('/')}?`)) return;
+  try {
+    await api('/api/portfolio/cash', { method: 'POST', body: JSON.stringify({ type: f.type.value, amount, date: f.date.value, note: f.note.value }) });
+    showToast(`Đã ghi: ${label} ${vnd(amount)}`, 'success');
+    f.amount.value = '';
+    f.note.value = '';
+    loadPortfolio();
+  } catch (err) {
+    showToast(err.message, 'error', 6000);
+  }
+});
 
 $('pf-btn')?.addEventListener('click', showPortfolio);
 $('pf-refresh')?.addEventListener('click', loadPortfolio);
@@ -2807,6 +2855,17 @@ $('pf-body')?.addEventListener('click', async (e) => {
   if (sym) {
     e.preventDefault();
     analyze(sym.dataset.sym);
+    return;
+  }
+  const delCash = e.target.closest('[data-del-cash]');
+  if (delCash) {
+    if (!confirm('Xóa dòng tiền này khỏi sổ tiền mặt?')) return;
+    try {
+      await api(`/api/portfolio/cash/${encodeURIComponent(delCash.dataset.delCash)}`, { method: 'DELETE' });
+      loadPortfolio();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
     return;
   }
   const del = e.target.closest('[data-del]');
@@ -2876,7 +2935,8 @@ $('rank-card')?.addEventListener('click', (e) => {
 });
 
 function showRankView() {
-  ['empty', 'error', 'report', 'loading', 'picks', 'portfolio', 'sectorview'].forEach((id) => ($(id).hidden = true));
+  ['empty', 'error', 'report', 'loading', 'picks', 'portfolio', 'sectorview', 'autoview'].forEach((id) => ($(id).hidden = true));
+  $('auto-btn')?.classList.remove('on');
   markMobileView('analyze', 'more');
   $('sector-btn')?.classList.remove('on');
   $('picks-btn')?.classList.remove('on');
@@ -4116,7 +4176,8 @@ const SC = { period: 1, sort: 'net', data: null, open: new Set() };
 const tỷ = (v) => (v == null ? '–' : `${signed(v / 1e9, Math.abs(v) >= 1e11 ? 0 : 1)} tỷ`);
 
 function showSectors() {
-  ['empty', 'error', 'report', 'loading', 'picks', 'portfolio', 'rankview'].forEach((id) => ($(id).hidden = true));
+  ['empty', 'error', 'report', 'loading', 'picks', 'portfolio', 'rankview', 'autoview'].forEach((id) => ($(id).hidden = true));
+  $('auto-btn')?.classList.remove('on');
   markMobileView('analyze', 'more');
   ['picks-btn', 'pf-btn', 'rank-btn'].forEach((id) => $(id)?.classList.remove('on'));
   $('sectorview').hidden = false;
@@ -4326,7 +4387,9 @@ api('/api/ai/status').catch(() => ({ enabled: false })).then((s) => {
     showRankView();
   } else if (initial === 'nganh') {
     showSectors();
-  } else if (/^[A-Za-z0-9]{3,8}$/.test(initial) && !['watchlist', 'market', 'picks', 'danh-muc', 'xep-hang', 'nganh'].includes(initial)) {
+  } else if (initial === 'tu-dau-tu') {
+    showAutoTrade();
+  } else if (/^[A-Za-z0-9]{3,8}$/.test(initial) && !['watchlist', 'market', 'picks', 'danh-muc', 'xep-hang', 'nganh', 'tu-dau-tu'].includes(initial)) {
     analyze(initial.toUpperCase());
   } else {
     showPicks();
@@ -4346,8 +4409,140 @@ window.addEventListener('hashchange', () => {
     showRankView();
   } else if (h === 'nganh') {
     showSectors();
+  } else if (h === 'tu-dau-tu') {
+    showAutoTrade();
   } else if (/^[A-Za-z0-9]{3,8}$/.test(h)) {
     analyze(h.toUpperCase());
+  }
+});
+
+// ---------- Tool tự đầu tư (tài khoản giấy) ----------
+const AT_REASON = { hold_end: 'Hết 40 phiên, không còn là ứng viên', delisted: 'Ngừng giao dịch' };
+const vnd = (v) => (v == null ? '–' : `${Math.round(v).toLocaleString('vi-VN')} đ`);
+
+function showAutoTrade() {
+  ['empty', 'error', 'report', 'loading', 'picks', 'portfolio', 'rankview', 'sectorview'].forEach((id) => ($(id).hidden = true));
+  ['picks-btn', 'pf-btn', 'rank-btn', 'sector-btn'].forEach((id) => $(id)?.classList.remove('on'));
+  markMobileView('analyze', 'more');
+  $('auto-btn')?.classList.add('on');
+  $('autoview').hidden = false;
+  history.replaceState(null, '', '#tu-dau-tu');
+  loadAutoTrade();
+}
+
+async function loadAutoTrade(action = null) {
+  $('at-summary').innerHTML = '<div class="muted small">Đang tải…</div>';
+  try {
+    const d = action ? await api(`/api/autotrade/${action}`, { method: 'POST' }) : await api('/api/autotrade');
+    renderAutoTrade(d);
+  } catch (err) {
+    $('at-summary').innerHTML = `<p class="down">${esc(err.message)}</p>`;
+  }
+}
+
+function renderAutoTrade(d) {
+  if (!d.opened) {
+    $('at-actions').innerHTML = '';
+    $('at-summary').innerHTML = `
+      <div class="pk-none">
+        <p>Tool sẽ dùng đúng <b>vốn thực nạp ròng</b> của bạn${d.netContributed ? ` (<b>${vnd(d.netContributed)}</b>)` : ''} để tự chọn mã và tự mua bán, giống hệt quy trình bạn đang xem trong các khuyến nghị:</p>
+        <ul class="pk-none-list">
+          <li>Chọn mã điểm xếp hạng ≥ 70 và trên MA200, hoặc mã xu hướng chuẩn; tối đa ${d.rules.slots} mã, mỗi ngành ${d.rules.perSector} mã</li>
+          <li>Quyết định sau giờ đóng cửa (từ 15:10), khớp ở giá mở cửa phiên sau; xét lại mỗi ${d.rules.step} phiên, giữ ${d.rules.hold} phiên</li>
+          <li>Tính phí, thuế, T+2, kẹt trần/sàn; mua lô lẻ vì vốn nhỏ; vốn tự tăng/giảm theo vốn thực nạp ròng</li>
+        </ul>
+        <p class="muted small">Đây là tài khoản giấy để kiểm chứng tool có kiếm được lợi nhuận thật hay không: không đặt lệnh thật, không phải lời khuyên đầu tư. Cần ít nhất 6–12 tháng mới đủ để đánh giá.</p>
+        ${d.netContributed ? '<div class="picks-actions"><button type="button" class="btn btn-primary" id="at-open">Bắt đầu tự đầu tư</button></div>' : '<p class="down">Chưa có vốn thực nạp ròng: hãy nạp tiền ở trang Danh mục trước.</p>'}
+      </div>`;
+    $('at-body').innerHTML = '';
+    return;
+  }
+  $('at-actions').innerHTML = `
+    <button type="button" class="btn btn-secondary btn-sm" id="at-run" title="Xử lý ngay phiên đã chốt (bình thường tự chạy sau 15:10)">↻ Cập nhật</button>
+    <button type="button" class="btn btn-ghost btn-sm" id="at-reset">Đặt lại</button>`;
+  const cls = dirClass(d.pnl);
+  const vsIndex = d.pnlPct != null && d.indexPct != null ? d.pnlPct - d.indexPct : null;
+  $('at-summary').innerHTML = `
+    <div class="cap-stat-grid">
+      <div class="cap-stat-item primary"><div class="cap-stat-label">Tổng tài sản (NAV)</div><div class="cap-stat-val">${vnd(d.nav)}</div><div class="cap-stat-sub">Tiền mặt ${vnd(d.cash)} · cổ phiếu ${vnd(d.stock)}</div></div>
+      <div class="cap-stat-item ${cls}"><div class="cap-stat-label">Lãi / lỗ so với vốn</div><div class="cap-stat-val ${cls}">${d.pnl >= 0 ? '+' : ''}${vnd(d.pnl)}</div><div class="cap-stat-sub ${cls}">${signed(d.pnlPct)}% trên vốn ${vnd(d.funded)}</div></div>
+      <div class="cap-stat-item"><div class="cap-stat-label">So với VN-Index cùng kỳ</div><div class="cap-stat-val ${dirClass(vsIndex)}">${vsIndex != null ? `${signed(vsIndex)} điểm %` : '–'}</div><div class="cap-stat-sub">VN-Index ${d.indexPct != null ? `${signed(d.indexPct)}%` : '–'}</div></div>
+      <div class="cap-stat-item"><div class="cap-stat-label">Đã chạy</div><div class="cap-stat-val">${d.sessions} phiên</div><div class="cap-stat-sub">Mở ${new Date(d.openedAt).toLocaleDateString('vi-VN')} · ${d.decisions} lần ra quyết định${d.lastDate ? ` · phiên gần nhất ${d.lastDate.split('-').reverse().join('/')}` : ''}</div></div>
+      <div class="cap-stat-item"><div class="cap-stat-label">Lệnh đã đóng</div><div class="cap-stat-val">${d.closed.n ? `${d.closed.wins}/${d.closed.n} thắng` : 'Chưa có'}</div><div class="cap-stat-sub">Lãi đã chốt ${vnd(d.closed.pnl)} · phí ${vnd(d.fees)}</div></div>
+    </div>
+    ${d.sessions < 120 ? `<p class="muted small" style="margin-top:10px">Mới chạy ${d.sessions} phiên: kết quả lúc này chủ yếu là may rủi. Cần khoảng 120–250 phiên (6–12 tháng) và so với VN-Index mới đánh giá được tool.</p>` : ''}`;
+
+  const pendRows = d.pending.map((p) => `<tr>
+      <td><span class="st-badge ${p.side === 'BUY' ? 'up' : 'down'}">${p.side === 'BUY' ? 'MUA' : 'BÁN'}</span></td>
+      <td><a href="#${esc(p.symbol)}" class="pf-sym" data-sym="${esc(p.symbol)}"><b>${esc(p.symbol)}</b></a></td>
+      <td>${p.side === 'BUY' ? `~${fmt(p.estShares, 0)} cp` : `${fmt(p.shares, 0)} cp`}</td>
+      <td>${fmt(p.estPrice)}</td>
+      <td>${p.side === 'BUY' ? vnd(p.budget) : '–'}</td>
+      <td style="font-family:inherit">${esc(AT_REASON[p.reason] || p.reason || '')}</td></tr>`).join('');
+  const holdRows = d.holdings.map((h) => `<tr>
+      <td><a href="#${esc(h.symbol)}" class="pf-sym" data-sym="${esc(h.symbol)}"><b>${esc(h.symbol)}</b></a>${h.selling ? ' <span class="st-badge down">chờ bán</span>' : ''}</td>
+      <td>${fmt(h.shares, 0)}</td><td>${fmt(h.avgPrice)}</td><td>${fmt(h.price)}${h.live ? ' <span class="muted small">(trong phiên)</span>' : ''}</td>
+      <td>${vnd(h.value)}</td>
+      <td class="${dirClass(h.pnl)}">${h.pnl >= 0 ? '+' : ''}${vnd(h.pnl)}</td><td class="${dirClass(h.pnlPct)}">${signed(h.pnlPct)}%</td>
+      <td>${h.entryDate.split('-').reverse().join('/')}</td>
+      <td>${h.held} phiên${h.sellable ? '' : ` <span class="muted small">(chờ cổ về: còn ${h.wait} phiên, chưa bán được)</span>`}</td>
+      <td>${h.holdLeft ? `còn ${h.holdLeft} phiên` : 'đến hạn xét lại'}</td></tr>`).join('');
+  const orderRows = d.orders.map((o) => `<tr>
+      <td>${o.date.split('-').reverse().join('/')}</td>
+      <td><span class="st-badge ${o.side === 'BUY' ? 'up' : 'down'}">${o.side === 'BUY' ? 'MUA' : 'BÁN'}</span></td>
+      <td><a href="#${esc(o.symbol)}" class="pf-sym" data-sym="${esc(o.symbol)}"><b>${esc(o.symbol)}</b></a></td>
+      <td>${fmt(o.shares, 0)}</td><td>${fmt(o.price)}</td><td>${vnd(o.value)}</td><td>${vnd(o.fee)}</td>
+      <td class="${o.pnl != null ? dirClass(o.pnl) : ''}">${o.pnl != null ? `${o.pnl >= 0 ? '+' : ''}${vnd(o.pnl)} (${signed(o.returnPct)}%)` : '–'}</td>
+      <td style="font-family:inherit">${esc(AT_REASON[o.reason] || o.reason || '')}</td></tr>`).join('');
+  const tbl = (head, rows, empty) => (rows ? `<div class="tbl-wrap"><table class="tbl"><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="muted small">${empty}</p>`);
+
+  $('at-body').innerHTML = `
+    <section class="card">
+      <div class="card-head"><div><h3>Lệnh cho phiên tới</h3><div class="muted small">Tool đã quyết định sau giờ đóng cửa; sẽ khớp ở giá mở cửa phiên tới. Giá tham chiếu là giá đóng cửa gần nhất.</div></div></div>
+      ${d.gate?.breadth != null ? `<p class="small ${d.gate.gated ? 'down' : 'muted'}" style="margin:0 0 10px">Độ rộng thị trường phiên ${d.gate.date.split('-').reverse().join('/')}: <b>${Math.round(d.gate.breadth * 100)}%</b> số mã trên MA50${d.gate.gated ? ` (dưới ${Math.round(d.gate.min * 100)}%) → <b>tạm dừng mua mới</b>, mã đang giữ vẫn theo luật giữ / bán. Kiểm định 3 năm: dừng mua khi thị trường yếu giúp Sharpe 1,16 → 1,27, sụt tối đa −16,8% → −14,4%.` : ` (≥ ${Math.round(d.gate.min * 100)}%): được mua mới.`}</p>` : ''}
+      ${tbl(['Lệnh', 'Mã', 'Số lượng', 'Giá tham chiếu', 'Ngân sách', 'Lý do'], pendRows, d.gate?.gated ? 'Không mua mới phiên tới vì thị trường yếu.' : d.lastDate ? 'Không có lệnh mới cho phiên tới.' : 'Tool sẽ ra lệnh đầu tiên sau giờ đóng cửa phiên giao dịch tới (từ 15:10).')}
+    </section>
+    <section class="card">
+      <div class="card-head"><div><h3>Cổ phiếu đang nắm giữ</h3><div class="muted small">Lãi/lỗ đã trừ phí bán và thuế. Tool không mua bán liên tục: ra quyết định ${d.rules.step} phiên/lần, mỗi mã giữ ${d.rules.hold} phiên rồi xét lại (còn là ứng viên thì giữ tiếp, không thì bán). Cổ mua phiên T về tài khoản chiều T+2, sớm nhất bán ở phiên T+${d.rules.sellAfter}.</div></div></div>
+      ${tbl(['Mã', 'SL', 'Giá vốn', 'Giá hiện tại', 'Giá trị', 'Lãi/lỗ', '%', 'Ngày mua', 'Đã giữ', 'Hạn xét lại'], holdRows, 'Chưa nắm giữ mã nào.')}
+    </section>
+    ${d.equity.length >= 2 ? `<section class="card"><div class="card-head"><div><h3>Tài sản so với VN-Index</h3><div class="muted small">Cùng mốc 100 tại phiên đầu tiên</div></div></div><div id="at-chart" style="height:260px"></div></section>` : ''}
+    <section class="card">
+      <div class="card-head"><div><h3>Sổ lệnh đã khớp</h3><div class="muted small">Ghi lại mọi lệnh tool đã mua / bán, không bao giờ sửa.</div></div></div>
+      ${tbl(['Ngày', 'Lệnh', 'Mã', 'SL', 'Giá', 'Giá trị', 'Phí', 'Lãi/lỗ', 'Lý do'], orderRows, 'Chưa có lệnh nào được khớp.')}
+      ${d.unfilled.length ? `<details class="disclosure"><summary>Lệnh không khớp (${d.unfilled.length})</summary><ul class="pk-none-list">${d.unfilled.map((u) => `<li><b>${esc(u.symbol)}</b> <span class="muted">${u.date.split('-').reverse().join('/')} · ${u.side === 'BUY' ? 'mua' : 'bán'}: ${esc(u.why)}</span></li>`).join('')}</ul></details>` : ''}
+      ${d.cashFlows.length ? `<details class="disclosure"><summary>Nạp / rút theo vốn thực nạp ròng (${d.cashFlows.length})</summary><ul class="pk-none-list">${d.cashFlows.map((c) => `<li><b class="${dirClass(c.amount)}">${c.amount > 0 ? '+' : ''}${vnd(c.amount)}</b> <span class="muted">${c.date.split('-').reverse().join('/')} · ${esc(c.note)}</span></li>`).join('')}</ul></details>` : ''}
+    </section>`;
+  if (d.equity.length >= 2) renderAutoChart(d.equity);
+}
+
+function renderAutoChart(eq) {
+  const el = $('at-chart');
+  if (!el || !window.LightweightCharts) return;
+  const LC = window.LightweightCharts;
+  const chart = LC.createChart(el, {
+    autoSize: true,
+    ...CHART_TOUCH,
+    layout: { background: { color: css('--surface') }, textColor: css('--muted'), fontFamily: 'Inter, system-ui, sans-serif' },
+    grid: { vertLines: { color: css('--grid') }, horzLines: { color: css('--grid') } },
+    rightPriceScale: { borderColor: css('--axis') }, timeScale: { borderColor: css('--axis') },
+    localization: { locale: 'vi-VN' },
+  });
+  const idx0 = eq.find((e) => e.index)?.index;
+  // Chỉ số hóa theo vốn để nạp / rút không làm đường tài sản nhảy
+  chart.addLineSeries({ color: css('--accent'), lineWidth: 2, title: 'Tool' })
+    .setData(eq.map((e) => ({ time: e.date, value: (e.nav / e.funded) * 100 })));
+  if (idx0) chart.addLineSeries({ color: css('--muted'), lineWidth: 1, title: 'VN-Index' })
+    .setData(eq.filter((e) => e.index).map((e) => ({ time: e.date, value: (e.index / idx0) * 100 })));
+  chart.timeScale().fitContent();
+}
+
+$('auto-btn')?.addEventListener('click', showAutoTrade);
+document.addEventListener('click', async (e) => {
+  if (e.target.closest('#at-open')) loadAutoTrade('open');
+  else if (e.target.closest('#at-run')) loadAutoTrade('run');
+  else if (e.target.closest('#at-reset')) {
+    if (confirm('Đặt lại sẽ xóa toàn bộ lịch sử giao dịch của tool tự đầu tư. Tiếp tục?')) loadAutoTrade('reset');
   }
 });
 
@@ -4431,6 +4626,7 @@ function initMobileNav() {
       $('sectorview').hidden = true;
       $('rankview').hidden = true;
       $('portfolio').hidden = true;
+      $('autoview').hidden = true;
       $('report').hidden = false;
     } else {
       showPicks();
@@ -4479,6 +4675,13 @@ function initMobileNav() {
     if (sheet) sheet.hidden = true;
     setMobileTab('analyze');
     showRankView();
+  });
+
+  $('mb-btn-auto')?.addEventListener('click', () => {
+    const sheet = $('mobile-more-sheet');
+    if (sheet) sheet.hidden = true;
+    setMobileTab('analyze');
+    showAutoTrade();
   });
 
   $('mb-btn-pf')?.addEventListener('click', () => {

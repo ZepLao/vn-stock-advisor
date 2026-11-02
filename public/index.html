@@ -12,8 +12,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/components.css?v=64">
-  <link rel="stylesheet" href="/style.css?v=64">
+  <link rel="stylesheet" href="/components.css?v=68">
+  <link rel="stylesheet" href="/style.css?v=68">
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -114,6 +114,9 @@
         </button>
         <button type="button" id="pf-btn" class="nav-link picks-btn">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>Danh mục
+        </button>
+        <button type="button" id="auto-btn" class="nav-link picks-btn">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4M9 14h.01M15 14h.01M2 13v3M22 13v3"/></svg>Tool tự đầu tư
         </button>
       </nav>
 
@@ -429,7 +432,43 @@
             <button type="submit" class="btn btn-primary btn-sm">+ Ghi lệnh</button>
           </form>
         </section>
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <h3>💵 Nạp / rút tiền</h3>
+              <div class="muted small" id="pf-cash-sub">Ghi tiền nạp vào / rút ra tài khoản chứng khoán để tính đúng tiền mặt, vốn thực nạp ròng và lãi/lỗ toàn tài khoản.</div>
+            </div>
+          </div>
+          <form id="pf-cash-form" class="bt-form">
+            <label><span>Loại</span><select name="type">
+              <option value="DEPOSIT">Nạp tiền</option>
+              <option value="WITHDRAW">Rút tiền</option>
+              <option value="DIVIDEND">Cổ tức tiền</option>
+              <option value="PROFIT">Lãi vòng trước</option>
+              <option value="SET">Đặt số dư (theo CTCK)</option>
+            </select></label>
+            <label><span>Số tiền (đồng)</span><input name="amount" required placeholder="5tr, 500k, 5.000.000" inputmode="text" autocomplete="off"></label>
+            <label><span>Ngày</span><input name="date" type="date" required></label>
+            <label class="grow"><span>Ghi chú</span><input name="note" maxlength="200" placeholder="Ví dụ: nạp thêm vốn tháng 11"></label>
+            <button type="submit" class="btn btn-primary btn-sm">+ Ghi</button>
+          </form>
+        </section>
         <div id="pf-body"></div>
+      </div>
+
+      <!-- Tool tự đầu tư (tài khoản giấy) -->
+      <div id="autoview" class="picks-view" hidden>
+        <section class="card">
+          <div class="page-head">
+            <div>
+              <h1 class="picks-title">Tool tự đầu tư</h1>
+              <div class="muted small">Tài khoản giấy dùng đúng vốn thực nạp ròng của bạn, tự mua bán theo quy trình cuốn chiếu đã kiểm chứng. <b>Không đặt lệnh thật.</b></div>
+            </div>
+            <div class="picks-actions" id="at-actions"></div>
+          </div>
+          <div id="at-summary"></div>
+        </section>
+        <div id="at-body"></div>
       </div>
 
       <!-- Đang tải -->
@@ -853,6 +892,7 @@
       <div class="sheet-grid">
         <button type="button" class="sheet-item" id="mb-btn-sector"><span class="sheet-item-icon" aria-hidden="true">🏭</span><span class="sheet-item-text"><b>Dòng tiền ngành</b><span>Ngành hút tiền / bị bán</span></span></button>
         <button type="button" class="sheet-item" id="mb-btn-rank"><span class="sheet-item-icon" aria-hidden="true">🎯</span><span class="sheet-item-text"><b>Xếp hạng</b><span>4 yếu tố &amp; backtest</span></span></button>
+        <button type="button" class="sheet-item" id="mb-btn-auto"><span class="sheet-item-icon" aria-hidden="true">🤖</span><span class="sheet-item-text"><b>Tool tự đầu tư</b><span>Tool tự mua bán bằng vốn của bạn</span></span></button>
         <button type="button" class="sheet-item" id="mb-btn-pf"><span class="sheet-item-icon" aria-hidden="true">💼</span><span class="sheet-item-text"><b>Danh mục</b><span>Lãi/lỗ &amp; T+2</span></span></button>
         <button type="button" class="sheet-item" id="mb-btn-alerts"><span class="sheet-item-icon" aria-hidden="true">🔔</span><span class="sheet-item-text"><b>Cảnh báo</b><span>Lịch sử cảnh báo giá</span></span></button>
         <button type="button" class="sheet-item" id="mb-btn-random"><span class="sheet-item-icon" aria-hidden="true">🎲</span><span class="sheet-item-text"><b>Mã ngẫu nhiên</b><span>Phân tích 1 mã bất kỳ</span></span></button>
@@ -869,6 +909,6 @@
     <div class="tooltip-action" id="tt-action">Bấm để phân tích</div>
   </div>
 
-  <script src="/app.js?v=64" type="module"></script>
+  <script src="/app.js?v=68" type="module"></script>
 </body>
 </html>

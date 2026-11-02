@@ -33,6 +33,7 @@ import { startTelegramBot } from './src/telegrambot.js';
 import { startOutlookSchedule, buildOutlook, getOutlook, formatOutlook } from './src/outlook.js';
 import { startIntraday, captureIntraday, INTRADAY_MINUTES } from './src/intraday.js';
 import { startDiagnose, runDiagnosis, lastDiagnosis } from './src/diagnose.js';
+import { getAutoTrade, openAccount, resetAccount, runAutoTrade, startAutoTradeSchedule, syncFunding } from './src/autotrade.js';
 import {
   getWatchlist, addToWatchlist, removeFromWatchlist, scanWatchlist,
   getAlerts, markAlertsRead, startMonitor, runAi, getAiResult, triggerTestAlert,
@@ -188,6 +189,17 @@ const routes = [
     const period = new URL(req.url, 'http://localhost').searchParams.get('period') || '1';
     send(res, 200, await getSectorFlows(period));
   }],
+  // Tool tự đầu tư (tài khoản giấy, vốn = vốn thực nạp ròng): xem, mở, đặt lại, xử lý phiên đã chốt ngay
+  ['GET', /^\/api\/autotrade$/, async (req, res) => send(res, 200, await getAutoTrade())],
+  ['POST', /^\/api\/autotrade\/open$/, async (req, res) => {
+    try {
+      send(res, 200, await openAccount());
+    } catch (err) {
+      send(res, 400, { error: err.message });
+    }
+  }],
+  ['POST', /^\/api\/autotrade\/reset$/, async (req, res) => send(res, 200, await resetAccount())],
+  ['POST', /^\/api\/autotrade\/run$/, async (req, res) => { await runAutoTrade(); send(res, 200, await getAutoTrade()); }],
   // Danh mục đầu tư thực tế
   ['GET', /^\/api\/portfolio$/, async (req, res) => send(res, 200, await getPortfolio())],
   ['POST', /^\/api\/portfolio\/tx$/, async (req, res) => {
@@ -208,12 +220,18 @@ const routes = [
   // Quản lý vốn: nạp / rút / cổ tức tiền / đặt số dư
   ['POST', /^\/api\/portfolio\/cash$/, async (req, res) => {
     try {
-      send(res, 200, await addCash(await readBody(req)));
+      const c = await addCash(await readBody(req));
+      await syncFunding().catch(() => {}); // tool tự đầu tư nạp / rút theo ngay
+      send(res, 200, c);
     } catch (err) {
       send(res, 400, { error: err.message });
     }
   }],
-  ['DELETE', /^\/api\/portfolio\/cash\/([^/]+)$/, async (req, res, [id]) => send(res, 200, await removeCash(id))],
+  ['DELETE', /^\/api\/portfolio\/cash\/([^/]+)$/, async (req, res, [id]) => {
+    const r = await removeCash(id);
+    await syncFunding().catch(() => {}); // tool tự đầu tư nạp / rút theo ngay
+    send(res, 200, r);
+  }],
   ['GET', /^\/api\/watchlist$/, async (req, res) => send(res, 200, await getWatchlist())],
   ['POST', /^\/api\/watchlist$/, async (req, res) => {
     const body = await readBody(req);
@@ -346,6 +364,9 @@ server.listen(PORT, process.env.HOST || '127.0.0.1', () => {
   startHistorySchedule();
   // Quét cổ phiếu tiềm năng mỗi ngày giao dịch sau 15:10
   startScreenerSchedule();
+  // Tool tự đầu tư (tài khoản giấy): sau 15:10 khớp lệnh phiên vừa chốt ở giá mở cửa, ra lệnh cho phiên tới
+  startAutoTradeSchedule();
+  console.log('Tool tự đầu tư (tài khoản giấy): BẬT — xử lý mỗi phiên sau 15:10, không đặt lệnh thật');
   // Lưu mua/bán chủ động cả phiên (sau 15:10) cho danh sách theo dõi, danh mục và cổ phiếu tiềm năng
   startFlowCapture(async () => {
     const [w, p, sc] = await Promise.all([getWatchlist().catch(() => []), getPortfolio().catch(() => null), getScreener().catch(() => null)]);

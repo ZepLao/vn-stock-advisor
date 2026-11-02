@@ -13,7 +13,27 @@ import { BANDS, DEFAULTS, LOT, priceLimits, tickSize, roundUp, roundDown, calcMe
 import { FACTORS, factorReader, buildRef, compositeScore, poolMap, pointInTimeUniverse, TREND_PICK_RULE } from './ranking.js';
 import { getSectorFlows } from './sectors.js';
 
-export const ROLLING_RULES = { slots: 10, perSector: 3, step: 5, hold: 40, sizing: 'inv_vol', stopPct: null };
+// minBreadth: không mua MỚI ở phiên quyết định khi tỷ lệ mã trong rổ (đủ thanh khoản) đóng cửa trên MA50 dưới ngưỡng này;
+// vị thế đang giữ vẫn theo luật giữ / bán. Kiểm định 11/2026 (3 năm, rổ theo thời điểm, đặt quy tắc trước: Sharpe cao hơn ở
+// cả hai nửa và sụt tối đa không tệ hơn): Sharpe 1,16 → 1,27 (nửa đầu 1,04 → 1,22, nửa sau 1,32 → 1,35), sụt −16,8% → −14,4%,
+// lãi +64,5% → +63,4%. Lọc theo VN-Index dưới MA50 thì kém hẳn (Sharpe 0,76) — đúng như nghiên cứu cũ về lọc theo chỉ số.
+// sellAfter: số phiên sau phiên mua mới bán được ở GIÁ MỞ CỬA. Cổ phiếu mua phiên T về tài khoản chiều T+2, nên lệnh bán
+// khớp mở cửa sớm nhất ở phiên T+3 (trước đây dùng 2 = bán sáng T+2 khi cổ phiếu chưa về).
+export const ROLLING_RULES = { slots: 10, perSector: 3, step: 5, hold: 40, sizing: 'inv_vol', stopPct: null, minBreadth: 0.5, sellAfter: 3 };
+
+/** Giá đóng cửa phiên i trên MA50 (null nếu chưa đủ 50 phiên). */
+export function aboveMa50(bars, i) {
+  if (i < 49) return null;
+  let s = 0;
+  for (let k = i - 49; k <= i; k++) s += bars[k].close;
+  return bars[i].close > s / 50;
+}
+
+/** Độ rộng thị trường: tỷ lệ mã có `up` = true trong các mã đã biết (hàm thuần). */
+export function breadthOf(rows) {
+  const known = rows.filter((x) => x.up != null);
+  return known.length ? known.filter((x) => x.up).length / known.length : null;
+}
 
 const round = (v, d = 4) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d);
 const median = (a) => {
@@ -22,12 +42,75 @@ const median = (a) => {
 };
 
 // Biến động 60 phiên (độ lệch chuẩn lãi ngày) tại phiên i
-function vol60(bars, i) {
+export function vol60(bars, i) {
   if (i < 61) return null;
   const r = [];
   for (let k = i - 59; k <= i; k++) r.push(bars[k].close / bars[k - 1].close - 1);
   const m = r.reduce((a, b) => a + b, 0) / r.length;
   return Math.sqrt(r.reduce((a, b) => a + (b - m) ** 2, 0) / (r.length - 1));
+}
+
+/**
+ * Ứng viên tại một phiên quyết định (hàm thuần): điểm ≥ 70 và trên MA200, hoặc xu hướng chuẩn; điểm cao trước.
+ * @param {{ s: string, f: object, vol: number|null }[]} rows các mã thuộc rổ, đủ thanh khoản, có yếu tố tại phiên đó
+ */
+export function rollingCandidates(rows) {
+  const ref = buildRef(rows.map((x) => x.f), FACTORS);
+  const vols = rows.map((x) => x.vol).filter((v) => v != null).sort((a, b) => a - b);
+  const volCut = vols.length ? vols[Math.floor(vols.length * TREND_PICK_RULE.maxVolPct) - 1] ?? vols.at(-1) : null;
+  const cands = rows.map((x) => ({ ...x, score: compositeScore(x.f, ref, FACTORS)?.score ?? null }))
+    .filter((x) => x.score != null && ((x.score >= 70 && x.f.aboveMa200 !== false)
+      || (x.f.high >= TREND_PICK_RULE.nearHigh - 1 && x.vol != null && volCut != null && x.vol <= volCut)))
+    .sort((a, b) => b.score - a.score);
+  return { cands, isCand: new Set(cands.map((x) => x.s)), medVol: median(cands.map((x) => x.vol).filter((v) => v != null)) };
+}
+
+/**
+ * Kế hoạch tại phiên quyết định t (hàm thuần): mã đến hạn giữ (`hold` phiên) mà không còn là ứng viên thì bán,
+ * còn là ứng viên thì giữ tiếp; lấp suất trống bằng ứng viên điểm cao nhất (tối đa `perSector` mỗi ngành).
+ * @param {{ t: number, held: Map<string, { t: number }>, pendingSell: Set<string>|Map, cands, isCand, medVol,
+ *   value: number, free: number, sectorOf: (s: string) => string, R: object }} o
+ *   held: vị thế đang giữ (t = phiên bắt đầu tính hạn); value: giá trị danh mục; free: tiền mua được (tiền mặt + mã sắp bán)
+ * @returns {{ sells: string[], kept: string[], buys: { s: string, budget: number }[] }}
+ */
+export function rollingPlan({ t, held, pendingSell, cands, isCand, medVol, value, free, sectorOf, R }) {
+  const sells = [], kept = [], buys = [];
+  for (const [s, p] of held) {
+    if (pendingSell.has(s)) continue;
+    if (t - p.t >= R.hold) (isCand.has(s) ? kept : sells).push(s);
+  }
+  const staying = [...held.keys()].filter((s) => !pendingSell.has(s) && !sells.includes(s));
+  const perSec = new Map();
+  for (const s of staying) perSec.set(sectorOf(s), (perSec.get(sectorOf(s)) || 0) + 1);
+  const freeSlots = R.slots - staying.length;
+  if (freeSlots <= 0) return { sells, kept, buys };
+  const slot = value / R.slots;
+  for (const c of cands) {
+    if (buys.length >= freeSlots) break;
+    if (held.has(c.s)) continue;
+    const sec = sectorOf(c.s);
+    if ((perSec.get(sec) || 0) >= R.perSector) continue;
+    const w = R.sizing === 'inv_vol' && medVol && c.vol ? Math.min(1.5, Math.max(0.5, medVol / c.vol)) : 1;
+    if (free < slot * w * 0.5) break;
+    buys.push({ s: c.s, budget: slot * w });
+    free -= slot * w;
+    perSec.set(sec, (perSec.get(sec) || 0) + 1);
+  }
+  return { sells, kept, buys };
+}
+
+/** Giá khớp lệnh bán ở giá mở cửa phiên i (trừ trượt giá); null nếu mở cửa ở giá sàn (kẹt, không bán được). */
+export function sellFillPrice(bars, i, ex, slippage = DEFAULTS.slippage) {
+  const { floor } = priceLimits(bars[i - 1].close, BANDS[ex], ex);
+  if (bars[i].open <= floor + tickSize(floor, ex) - 1e-9) return null;
+  return Math.max(roundDown(bars[i].open * (1 - slippage), ex), floor);
+}
+
+/** Giá khớp lệnh mua ở giá mở cửa phiên i (cộng trượt giá); null nếu mở cửa ở giá trần (không mua được). */
+export function buyFillPrice(bars, i, ex, slippage = DEFAULTS.slippage) {
+  const { ceiling } = priceLimits(bars[i - 1].close, BANDS[ex], ex);
+  if (bars[i].open >= ceiling - tickSize(ceiling, ex) + 1e-9) return null;
+  return Math.min(roundUp(bars[i].open * (1 + slippage), ex), ceiling);
 }
 
 /**
@@ -37,7 +120,7 @@ function vol60(bars, i) {
 export function simulateRolling(cal, data, o) {
   const R = { ...ROLLING_RULES, ...o };
   const { start, minValue, initialCash, members = null, sectorOf = () => 'Khác' } = o;
-  const { brokerage, sellTax, slippage, settlementBars } = DEFAULTS;
+  const { brokerage, sellTax, slippage } = DEFAULTS;
   const syms = Object.keys(data);
   const calAt = new Map(cal.map((b, k) => [b.time, k]));
   let cash = initialCash, fees = 0;
@@ -64,18 +147,17 @@ export function simulateRolling(cal, data, o) {
     for (const [s, reason] of [...pendingSell]) {
       const d = data[s], i = d.at.get(date), p = pos.get(s);
       if (!p) { pendingSell.delete(s); continue; }
-      if (i == null || i < 1 || t - p.t0 < settlementBars) continue;
-      const { floor } = priceLimits(d.bars[i - 1].close, BANDS[d.ex], d.ex);
-      if (d.bars[i].open <= floor + tickSize(floor, d.ex) - 1e-9) { blocked.floor++; continue; }
-      sell(s, p, Math.max(roundDown(d.bars[i].open * (1 - slippage), d.ex), floor), t, date, reason);
+      if (i == null || i < 1 || t - p.t0 < R.sellAfter) continue; // cổ phiếu chưa về (về chiều T+2)
+      const price = sellFillPrice(d.bars, i, d.ex, slippage);
+      if (price == null) { blocked.floor++; continue; }
+      sell(s, p, price, t, date, reason);
       pendingSell.delete(s);
     }
     for (const b of pendingBuy) {
       const d = data[b.s], i = d.at.get(date);
       if (i == null || i < 1 || pos.has(b.s)) continue;
-      const { ceiling } = priceLimits(d.bars[i - 1].close, BANDS[d.ex], d.ex);
-      if (d.bars[i].open >= ceiling - tickSize(ceiling, d.ex) + 1e-9) { blocked.ceiling++; continue; }
-      const price = Math.min(roundUp(d.bars[i].open * (1 + slippage), d.ex), ceiling);
+      const price = buyFillPrice(d.bars, i, d.ex, slippage);
+      if (price == null) { blocked.ceiling++; continue; }
       const shares = Math.floor(Math.min(b.budget, cash) / (price * 1000 * (1 + brokerage)) / LOT) * LOT;
       if (shares <= 0) continue;
       const gross = shares * price * 1000, fee = gross * brokerage;
@@ -108,44 +190,17 @@ export function simulateRolling(cal, data, o) {
       if (i == null || avgTradedValue(d.bars, 20, i) < minValue) continue;
       const f = d.read(i);
       if (!f) continue;
-      rows.push({ s, f, vol: vol60(d.bars, i) });
+      rows.push({ s, f, vol: vol60(d.bars, i), up: aboveMa50(d.bars, i) });
     }
-    const ref = buildRef(rows.map((x) => x.f), FACTORS);
-    const vols = rows.map((x) => x.vol).filter((v) => v != null).sort((a, b) => a - b);
-    const volCut = vols.length ? vols[Math.floor(vols.length * TREND_PICK_RULE.maxVolPct) - 1] ?? vols.at(-1) : null;
-    const cands = rows.map((x) => ({ ...x, score: compositeScore(x.f, ref, FACTORS)?.score ?? null }))
-      .filter((x) => x.score != null && ((x.score >= 70 && x.f.aboveMa200 !== false)
-        || (x.f.high >= TREND_PICK_RULE.nearHigh - 1 && x.vol != null && volCut != null && x.vol <= volCut)))
-      .sort((a, b) => b.score - a.score);
-    const isCand = new Set(cands.map((x) => x.s));
-
-    // Mã đến hạn: vẫn là ứng viên thì giữ tiếp (tính lại hạn), không thì bán
-    for (const [s, p] of pos) {
-      if (pendingSell.has(s)) continue;
-      if (t - p.t >= R.hold) {
-        if (isCand.has(s)) { p.t = t; stats.kept++; } else pendingSell.set(s, 'hold_end');
-      }
-    }
-    // Lấp suất trống
-    const staying = [...pos.keys()].filter((s) => !pendingSell.has(s));
-    const perSec = new Map();
-    for (const s of staying) perSec.set(sectorOf(s), (perSec.get(sectorOf(s)) || 0) + 1);
-    const freeSlots = R.slots - staying.length;
-    if (freeSlots <= 0) continue;
-    const slot = value / R.slots;
-    const medVol = median(cands.map((x) => x.vol).filter((v) => v != null));
-    let free = cash + [...pendingSell.keys()].reduce((a, s) => a + (pos.get(s)?.shares || 0) * (lastClose[s] || 0) * 1000, 0);
-    for (const c of cands) {
-      if (pendingBuy.length >= freeSlots) break;
-      if (pos.has(c.s)) continue;
-      const sec = sectorOf(c.s);
-      if ((perSec.get(sec) || 0) >= R.perSector) continue;
-      const w = R.sizing === 'inv_vol' && medVol && c.vol ? Math.min(1.5, Math.max(0.5, medVol / c.vol)) : 1;
-      if (free < slot * w * 0.5) break;
-      pendingBuy.push({ s: c.s, budget: slot * w });
-      free -= slot * w;
-      perSec.set(sec, (perSec.get(sec) || 0) + 1);
-    }
+    const { cands, isCand, medVol } = rollingCandidates(rows);
+    // Mã đến hạn: vẫn là ứng viên thì giữ tiếp (tính lại hạn), không thì bán. Rồi lấp suất trống.
+    const due = rollingPlan({ t, held: pos, pendingSell, cands, isCand, medVol, value, free: 0, sectorOf, R: { ...R, slots: 0 } });
+    for (const s of due.kept) { pos.get(s).t = t; stats.kept++; }
+    for (const s of due.sells) pendingSell.set(s, 'hold_end');
+    // Thị trường yếu (độ rộng dưới ngưỡng): không mua mới phiên này
+    if (R.minBreadth != null && (breadthOf(rows) ?? 1) < R.minBreadth) { stats.gated = (stats.gated || 0) + 1; continue; }
+    const free = cash + [...pendingSell.keys()].reduce((a, s) => a + (pos.get(s)?.shares || 0) * (lastClose[s] || 0) * 1000, 0);
+    pendingBuy = rollingPlan({ t, held: pos, pendingSell, cands, isCand, medVol, value, free, sectorOf, R }).buys;
   }
   return { equity, trades, blocked, fees, stats, positions: [...pos.keys()] };
 }
