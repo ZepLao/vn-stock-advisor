@@ -290,6 +290,68 @@ export function planOrders({ held, candidates, capital = null, cash = null, buyC
     cash: cash != null ? { available: Math.round(cash), used: Math.round(cash - left), short: Math.max(0, Math.round(wanted - cash)) } : null };
 }
 
+// Mua thêm chỉ khi: vẫn trong nhóm mua, thị trường đủ rộng (luật độ rộng của quy trình cuốn chiếu, đã kiểm định), mã đang
+// lãi (không bình quân giá xuống) và chưa vượt một suất. Ngưỡng lãi tối thiểu theo quy tắc 5 trong 20 quy tắc của tool.
+export const ADD_RULES = { minProfit: 0.03, minBreadth: 0.5, slots: 10, maxWeight: 0.3, highAtr: 0.04 };
+
+/**
+ * Phân tích một mã đang giữ (hàm thuần): việc nên làm (BÁN / XEM LẠI / MUA THÊM / GIỮ) và các rủi ro cụ thể.
+ * Phần BÁN / XEM LẠI lấy đúng từ planOrders để bản tin không tự mâu thuẫn.
+ * @param {object} a kết quả analyzeSymbol (có a.holding)
+ * @param {{ sell?: string|null, review?: boolean, breadth?: number|null, nav?: number|null, sector?: object|null }} ctx
+ *   sell: lý do bán từ planOrders; review: dưới ngưỡng −15%; breadth: tỷ lệ mã trên MA50 (0–1); nav: tổng tài sản (đồng)
+ */
+export function holdingAdvice(a, { sell = null, review = false, breadth = null, nav = null, sector = null } = {}, R = ADD_RULES) {
+  const h = a.holding || {}, L = a.brief?.levels || {}, close = a.price?.close;
+  const N = L.holdSessions ?? HOLD_RULE.sessions, held = L.heldSessions ?? null, stop = L.holdStop ?? null;
+  const value = h.qty && close ? h.qty * close * 1000 : null;
+  const weight = value && nav > 0 ? value / nav : null;
+  const inBuyGroup = BUY_CODES.includes(a.brief?.code);
+
+  const risks = [];
+  if (stop != null && close) risks.push(close < stop ? `đã dưới ngưỡng thoát ${num(stop)}` : `cách ngưỡng thoát ${num(stop)} còn ${num((close / stop - 1) * 100, 1)}%`);
+  if (a.ranking?.avoid) risks.push('⛔ thuộc 10% điểm thấp nhất rổ');
+  else if (a.ranking?.aboveMa200 === false) risks.push('giá dưới MA200 (xu hướng dài hạn yếu)');
+  if (a.stockRisk?.isRisky) risks.push(`rủi ro rơi tự do${a.stockRisk.reasons?.length ? `: ${a.stockRisk.reasons[0]}` : ''}`);
+  for (const w of a.buyWarnings || []) risks.push(`${w.name}: ${w.text}`);
+  if (a.foreign?.net5 != null && a.foreign.net5 < 0) risks.push(`khối ngoại bán ròng 5 phiên ${num(a.foreign.net5 / 1e9, 1)} tỷ`);
+  if (sector?.net != null && sector.net < 0) risks.push(`ngành ${sector.name} bị rút ròng ${num(sector.net / 1e9, 0)} tỷ (5 phiên)`);
+  const atrPct = a.technical?.indicators?.atr14 && close ? a.technical.indicators.atr14 / close : null;
+  if (atrPct != null && atrPct >= R.highAtr) risks.push(`biến động mạnh: ATR ${num(atrPct * 100, 1)}%/phiên`);
+  if (weight != null && weight > R.maxWeight) risks.push(`tập trung: chiếm ${num(weight * 100, 0)}% tài sản`);
+  if (h.pending) risks.push(`${num(h.pending, 0)} cp chưa về (T+2)`);
+
+  let action, why;
+  if (sell) { action = 'BÁN'; why = sell; }
+  else if (review) { action = 'XEM LẠI'; why = 'đóng cửa dưới ngưỡng thoát −15% giá vốn: bán phiên tới nếu không còn lý do giữ, không bình quân giá xuống'; }
+  else {
+    const noAdd = [
+      !inBuyGroup && 'không còn trong nhóm mua',
+      breadth != null && breadth < R.minBreadth && `thị trường yếu (${num(breadth * 100, 0)}% mã trên MA50)`,
+      !(h.pnlPct >= R.minProfit) && `chưa lãi ≥ ${num(R.minProfit * 100, 0)}% (không bình quân giá xuống)`,
+      weight != null && weight >= 1 / R.slots && `đã đủ một suất (${num(weight * 100, 0)}% tài sản)`,
+      (a.buyWarnings || []).length > 0 && 'đang có cảnh báo khoan mua',
+    ].filter(Boolean);
+    if (!noAdd.length) { action = 'MUA THÊM'; why = 'vẫn trong nhóm mua, đang lãi, thị trường đủ rộng: có thể nâng lên đủ một suất'; }
+    else { action = 'GIỮ'; why = `${inBuyGroup ? 'vẫn trong nhóm mua' : `giữ đến đủ ${N} phiên rồi xét lại`}; không mua thêm vì ${noAdd.join(', ')}`; }
+  }
+  return { symbol: a.symbol, action, why, risks, close, qty: h.qty ?? null, avgCost: h.avgCost ?? null, pnlPct: h.pnlPct ?? null, held, N, weight };
+}
+
+const ADVICE_ICON = { 'BÁN': '🔴', 'XEM LẠI': '⚠️', 'MUA THÊM': '🟢', 'GIỮ': '🟡' };
+
+/** Khối phân tích mã đang nắm cho bản tin (hàm thuần). */
+export function formatHoldingAdvice(list) {
+  const L = [];
+  for (const x of list) {
+    const pnl = x.pnlPct != null ? ` · ${x.pnlPct >= 0 ? 'lãi' : 'lỗ'} <b>${sgn(x.pnlPct * 100)}</b>` : '';
+    L.push(`▸ <b>${esc(x.symbol)}</b> ${num(x.close)}${x.qty ? ` · ${num(x.qty, 0)} cp vốn ${num(x.avgCost)}` : ''}${pnl}${x.held != null ? ` · ${x.held}/${x.N} phiên` : ''}`);
+    L.push(`${IND}${ADVICE_ICON[x.action]} <b>${x.action}</b>: ${esc(x.why)}`);
+    if (x.risks.length) L.push(`${IND}Rủi ro: ${x.risks.map(esc).join(' · ')}`);
+  }
+  return L;
+}
+
 const REGIME_LABEL = { CONFIRMED_UPTREND: '🟢 tăng', UPTREND_UNDER_PRESSURE: '🟡 tăng có áp lực', MARKET_CORRECTION: '🔴 điều chỉnh', UNKNOWN: '⚪ chưa xác định (không mua mới)' };
 
 /** Bản tin sau phiên (hàm thuần). */
@@ -339,7 +401,8 @@ export function formatCloseReport({ date, market, regime, plan, summary = null, 
   if (holding) {
     const perf = summary ? ` · ${summary.unrealizedPct >= 0 ? 'lãi' : 'lỗ'} <b>${sgn(summary.unrealizedPct)}</b> · hôm nay ${money(summary.dayChange)}` : '';
     L.push('', D, `💼 <b>DANH MỤC</b> ${holding}/${slots} mã${perf}`);
-    if (plan.keep.length) L.push(`Giữ: ${plan.keep.map((k) => `${esc(k.symbol)}${k.held != null ? ` ${k.held}/${N}` : ''}${k.pnlPct != null ? ` ${sgn(k.pnlPct * 100, 0)}` : ''}`).join(' · ')}`);
+    if (plan.advice?.length) L.push('🔎 <b>Phân tích từng mã đang nắm</b>', ...formatHoldingAdvice(plan.advice));
+    else if (plan.keep.length) L.push(`Giữ: ${plan.keep.map((k) => `${esc(k.symbol)}${k.held != null ? ` ${k.held}/${N}` : ''}${k.pnlPct != null ? ` ${sgn(k.pnlPct * 100, 0)}` : ''}`).join(' · ')}`);
   }
 
   const ex = expectation?.h20;
@@ -479,6 +542,13 @@ export async function buildReport(kind = 'close') {
   plan.core = coreInfo;
   const { getMarketRegime } = await import('./regime.js');
   const regime = await getMarketRegime().catch(() => null);
+  // Phân tích từng mã đang nắm: rủi ro + bán / xem lại / giữ / mua thêm (bán và xem lại lấy đúng từ planOrders)
+  const breadth = regime?.breadth?.pctAboveMa50 != null ? regime.breadth.pctAboveMa50 / 100 : null;
+  const sellWhy = new Map(plan.sells.map((s) => [s.symbol, s.reason]));
+  const reviewSet = new Set(plan.review.map((r) => r.symbol));
+  plan.advice = held.map(({ a }) => holdingAdvice(a, {
+    sell: sellWhy.get(a.symbol) ?? null, review: reviewSet.has(a.symbol), breadth, nav: capital, sector: sectors.get(a.symbol) ?? null,
+  }));
   const expectation = plan.buys[0] ? candidates.find((c) => c.a.symbol === plan.buys[0].symbol)?.a.expectation : null;
   const notes = [
     rejected.length && `AI loại: ${rejected.map(esc).join(', ')}`,
