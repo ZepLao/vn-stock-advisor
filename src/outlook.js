@@ -3,7 +3,7 @@
 // 20 phiên kèm mã mạnh nhất, khối ngoại, độ rộng, tin thị trường vài ngày gần nhất.
 // Kiểm tra đầu ra: ngành/mã phải có trong dữ liệu, vùng giá kẹp trong dải 5–95%. Dự báo được ghi vào nhật ký dự đoán
 // (nguồn 'outlook' cho VN-Index, 'outlook_sector' cho mã của ngành được chọn) để tự chấm sau 5 phiên.
-// Gửi Telegram mỗi đầu tuần (thứ 2 từ 8:15, bù đến thứ 3 nếu app tắt). Lưu data/outlook.json.
+// Gửi Telegram ngay sau phiên cuối tuần (thứ 6 từ 15:45, bù thứ 7 và chủ nhật nếu app tắt). Lưu data/outlook.json.
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -218,15 +218,25 @@ export async function buildOutlook(now = new Date()) {
   return x;
 }
 
-/** Thứ 2 từ 8:15 (bù tới hết thứ 3) gửi một lần mỗi tuần. */
+/**
+ * Có gửi triển vọng lúc `now` không (hàm thuần): từ 15:45 thứ 6 (sau phiên cuối tuần, sau tổng kết tuần 15:40), bù trong
+ * thứ 7 và chủ nhật nếu server tắt. Không gửi sáng thứ 2 nữa: bản tin dùng giá đóng cửa thứ 6 nên gửi ngay sau phiên.
+ * @returns {{ monday: string, friday: string }|null} tuần cần gửi, null nếu ngoài khung
+ */
+export function outlookDue(now = new Date()) {
+  const vn = new Date(now.getTime() + 7 * 3600_000);
+  const dow = vn.getUTCDay(), m = vn.getUTCHours() * 60 + vn.getUTCMinutes();
+  if (!((dow === 5 && m >= 15 * 60 + 45) || dow === 6 || dow === 0)) return null;
+  return nextWeek(now);
+}
+
+/** Gửi một lần mỗi tuần theo outlookDue. */
 export function startOutlookSchedule(send) {
   if (!send) return null;
   const tick = async () => {
     try {
-      const vn = new Date(Date.now() + 7 * 3600_000);
-      const dow = vn.getUTCDay(), m = vn.getUTCHours() * 60 + vn.getUTCMinutes();
-      if (!((dow === 1 && m >= 8 * 60 + 15) || dow === 2)) return;
-      const week = nextWeek();
+      const week = outlookDue();
+      if (!week) return;
       const prev = await getOutlook();
       if (prev?.week?.monday === week.monday && prev.sentAt) return;
       const x = prev?.week?.monday === week.monday ? prev : await buildOutlook();

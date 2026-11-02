@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { nextWeek, sanitizeOutlook, formatOutlook, outlookLine } from '../src/outlook.js';
+import { nextWeek, outlookDue, sanitizeOutlook, formatOutlook, outlookLine } from '../src/outlook.js';
 
 const at = (date, hhmm) => new Date(`${date}T${hhmm}:00+07:00`);
 
@@ -51,4 +51,14 @@ test('Tin Telegram triển vọng tuần và dòng tóm tắt', () => {
   assert.match(t, /Hồi phục &lt;thận trọng&gt;/);
   assert.match(t, /1\. Ngân hàng<\/b> — có thể bùng nổ 🔥/);
   assert.equal(outlookLine(x), '🧭 Tuần (AI): tăng nhẹ · 1.700–1.780 · ngành: Ngân hàng');
+});
+
+test('outlookDue: gửi sau phiên chiều thứ 6 (từ 15:45), bù thứ 7 / chủ nhật; không gửi sáng thứ 2 hay trong tuần', () => {
+  const next = { monday: '2026-11-09', friday: '2026-11-13' };
+  assert.equal(outlookDue(at('2026-11-06', '15:30')), null, 'thứ 6 trước 15:45');
+  assert.deepEqual(outlookDue(at('2026-11-06', '15:45')), next);
+  assert.deepEqual(outlookDue(at('2026-11-07', '09:00')), next, 'bù thứ 7');
+  assert.deepEqual(outlookDue(at('2026-11-08', '21:00')), next, 'bù chủ nhật');
+  assert.equal(outlookDue(at('2026-11-09', '08:20')), null, 'sáng thứ 2 không gửi');
+  assert.equal(outlookDue(at('2026-11-04', '15:50')), null, 'giữa tuần không gửi');
 });
