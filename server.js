@@ -346,8 +346,8 @@ server.listen(PORT, process.env.HOST || '127.0.0.1', () => {
     startDiagnose(telegramConfig().enabled ? sendMessage : null);
     console.log(`Thu thập trong phiên: BẬT — mỗi ${INTRADAY_MINUTES} phút (9:15–11:30, 13:00–14:45) vào database; chẩn đoán dự đoán mỗi ngày sau 15:45`);
   }
-  // Triển vọng tuần do AI phân tích: gửi Telegram mỗi thứ 2 từ 8:15
-  if (startOutlookSchedule(telegramConfig().enabled ? sendMessage : null)) console.log('Triển vọng tuần (AI): BẬT — gửi Telegram mỗi thứ 2 từ 8:15');
+  // Triển vọng tuần do AI phân tích: gửi Telegram từ 15:45 thứ 6 (bù thứ 7, chủ nhật)
+  if (startOutlookSchedule(telegramConfig().enabled ? sendMessage : null)) console.log('Triển vọng tuần (AI): BẬT — gửi Telegram từ 15:45 thứ 6 (bù thứ 7, chủ nhật)');
   // Nhận lệnh từ Telegram: "mua HPG 1000 25.5 21/10" → ghi vào danh mục
   if (startTelegramBot()) console.log('Bot Telegram: BẬT — nhắn "mua/bán MÃ SỐ_LƯỢNG GIÁ [NGÀY]" để ghi danh mục, "danh mục", "hoàn tác"');
   // Quét toàn bộ rổ trong phiên, báo ngay mã nhóm dẫn đầu vừa vào vùng mua (đã qua AI)
