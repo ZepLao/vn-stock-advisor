@@ -1,11 +1,24 @@
 // Kiểm định "cổ ngon" trên BCTC theo thời điểm: `npm run research-quality` (cần đã chạy `npm run db-backfill`)
 // Thử thêm ROE vào điểm xếp hạng: `npm run research-quality -- roe`
+// Kiểm định khối ngoại: `npm run research-quality -- foreign 8`
+// Kiểm định 3 yếu tố mới (LN quý đột biến, động lượng ngành, đảo chiều 5 phiên) + khối ngoại: `npm run research-quality -- new3 8`
 import './src/env.js';
-import { runQualityResearch, formatQualityReport, runRoeTest, formatRoeReport } from './src/quality.js';
+import { runFactorLab, formatFactorReport } from './src/factorlab.js';
+import { runQualityResearch, formatQualityReport, runRoeTest, formatRoeReport, runForeignTest, formatForeignReport } from './src/quality.js';
 
 try {
   const roe = process.argv.includes('roe');
   const years = Number(process.argv.find((a) => /^\d+$/.test(a))) || 7;
+  if (process.argv.includes('new3')) {
+    console.log(`Kiểm định yếu tố mới, ${years} năm…`);
+    console.log(formatFactorReport(await runFactorLab({ years })));
+    process.exit(0);
+  }
+  if (process.argv.includes('foreign')) {
+    console.log(`Kiểm định khối ngoại, ${years} năm…`);
+    console.log(formatForeignReport(await runForeignTest({ years })));
+    process.exit(0);
+  }
   if (roe) {
     console.log(`Thử thêm ROE vào điểm xếp hạng, ${years} năm…`);
     console.log(formatRoeReport(await runRoeTest({ years })));

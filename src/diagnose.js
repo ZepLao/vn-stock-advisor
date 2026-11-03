@@ -161,23 +161,26 @@ export async function lastDiagnosis() {
 }
 
 /** Tin Telegram ngắn. */
+// Chữ lấy từ dữ liệu (nhóm độ tự tin "<60", tên nguồn, đề xuất…) phải mã hóa HTML, nếu không Telegram từ chối cả tin
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 export function formatDiagnosis(d) {
   const L = [`🩺 <b>CHẨN ĐOÁN DỰ ĐOÁN ${d.date.slice(8, 10)}/${d.date.slice(5, 7)}</b>`];
   const src = d.accuracy.filter((a) => a.horizon === 10 && a.beat_index_rate != null);
   if (src.length) L.push('', 'Đúng sau 10 phiên (so VN-Index / so rổ đồng tỷ trọng):', ...src.map((a) =>
-    `• ${a.source}: ${Math.round(a.beat_index_rate * 100)}%${a.beat_basket_rate != null ? ` / ${Math.round(a.beat_basket_rate * 100)}%` : ''} (${a.evaluated})`));
+    `• ${esc(a.source)}: ${Math.round(a.beat_index_rate * 100)}%${a.beat_basket_rate != null ? ` / ${Math.round(a.beat_basket_rate * 100)}%` : ''} (${a.evaluated})`));
   else L.push('', 'Chưa có dự đoán nào đủ 10 phiên để chấm.');
   if (d.fill.n) L.push('', `Vùng mua khớp trong 3 phiên: ${Math.round(d.fill.fill_rate * 100)}% (${d.fill.n} lệnh)`);
   const f5 = d.forecast?.find((x) => x.h === 5);
   if (f5?.n) L.push(`Dải giá 5 phiên chứa giá thật: ${pc(f5.coverage, 0)} · AI lệch ${pc(f5.err_ai, 1)} vs giá đứng yên ${pc(f5.err_naive, 1)} (${f5.n} lần)`);
   const conf = (d.confidence || []).filter((x) => x.who === 'ai');
-  if (conf.length) L.push(`Gemini theo độ tự tin, đúng so rổ 10 phiên: ${conf.map((x) => `${x.conf_band} ${pc(x.beat, 0)} (${x.n})`).join(' · ')}`);
+  if (conf.length) L.push(`Gemini theo độ tự tin, đúng so rổ 10 phiên: ${conf.map((x) => `${esc(x.conf_band)} ${pc(x.beat, 0)} (${x.n})`).join(' · ')}`);
   const top = (d.factors || []).filter((x) => x.days >= 5);
-  if (top.length) L.push(`IC yếu tố 10 phiên (${top[0].days} phiên): ${top.slice(0, 3).map((x) => `${x.factor} ${x.ic.toFixed(2)}`).join(', ')} … ${top.at(-1).factor} ${top.at(-1).ic.toFixed(2)}`);
+  if (top.length) L.push(`IC yếu tố 10 phiên (${top[0].days} phiên): ${top.slice(0, 3).map((x) => `${esc(x.factor)} ${x.ic.toFixed(2)}`).join(', ')} … ${esc(top.at(-1).factor)} ${top.at(-1).ic.toFixed(2)}`);
   if (d.outlook?.n) L.push(`Triển vọng tuần: VN-Index nằm trong khoảng AI dự báo ${pc(d.outlook.hit, 0)} (${d.outlook.n} tuần)`);
   const snaps = d.hours.reduce((s, h) => s + h.n, 0);
   L.push(`Dữ liệu trong phiên đã thu: ${snaps.toLocaleString('vi-VN')} điểm giá`);
-  L.push('', d.suggestions.length ? '<b>Đề xuất</b>' : '<i>Chưa đủ mẫu để đề xuất thay đổi.</i>', ...d.suggestions.map((s) => `• ${s.text}`));
+  L.push('', d.suggestions.length ? '<b>Đề xuất</b>' : '<i>Chưa đủ mẫu để đề xuất thay đổi.</i>', ...d.suggestions.map((s) => `• ${esc(s.text)}`));
   return L.join('\n');
 }
 

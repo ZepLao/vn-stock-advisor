@@ -302,3 +302,84 @@ export async function runQualityResearch({ years = 7, log = console.log } = {}) 
   await writeFile(FILE, JSON.stringify(rep), 'utf8');
   return rep;
 }
+
+// ---------- Khối ngoại: mua/bán ròng 20 phiên chia giá trị giao dịch 20 phiên ----------
+export const FOREIGN_FACTOR = { key: 'fnet', label: 'Khối ngoại mua ròng 20 phiên', sign: 1 };
+export const FOREIGN_WINDOW = 20;
+
+/** Khối ngoại theo ngày từ DB: { symbol: Map(date → net_val đồng) }. */
+export async function loadForeign() {
+  const r = await query(`SELECT symbol, to_char(date, 'YYYY-MM-DD') d, net_val FROM foreign_daily`);
+  const out = {};
+  for (const x of r.rows) (out[x.symbol] ??= new Map()).set(x.d, num(x.net_val));
+  return out;
+}
+
+/**
+ * Đọc yếu tố khối ngoại tại phiên i (hàm thuần): tổng mua ròng N phiên / tổng giá trị khớp N phiên.
+ * Chỉ dùng số liệu đến hết phiên i; thiếu quá nửa số phiên thì trả null.
+ */
+export function foreignReader(bars, net, N = FOREIGN_WINDOW) {
+  return (i) => {
+    if (i < N - 1) return null;
+    let n = 0, v = 0, seen = 0;
+    for (let k = i - N + 1; k <= i; k++) {
+      const b = bars[k];
+      v += b.close * 1000 * b.volume;
+      const x = net.get(b.time);
+      if (x != null) { n += x; seen++; }
+    }
+    return seen >= N / 2 && v > 0 ? n / v : null;
+  };
+}
+
+export function formatForeignReport(r) {
+  const m = (x) => `tổng ${pc(x.totalReturn)} · năm ${pc(x.annualReturn)} · sụt tối đa ${pc(x.maxDrawdown)} · Sharpe ${fx(x.sharpe)}`;
+  return [
+    `Kiểm định khối ngoại ${r.from} → ${r.to}`,
+    '',
+    `IC 20 phiên riêng khối ngoại: ${fx(r.alone.mean, 3)} (t ${fx(r.alone.t)})`,
+    `IC 20 phiên: 4 yếu tố ${fx(r.ic.a.mean, 3)} (t ${fx(r.ic.a.t)}) · 4 yếu tố + khối ngoại ${fx(r.ic.b.mean, 3)} (t ${fx(r.ic.b.t)})`,
+    `  chênh ${r.ic.diff.mean >= 0 ? '+' : ''}${fx(r.ic.diff.mean, 3)} (t ${fx(r.ic.diff.t)}; nửa đầu ${fx(r.ic.diff.first, 3)} / nửa sau ${fx(r.ic.diff.second, 3)})`,
+    '',
+    `Danh mục top 8 (tái cơ cấu 20 phiên, lọc MA200, tính phí thuế, T+2):`,
+    `  4 yếu tố:              ${m(r.portfolio.v1)}`,
+    `  4 yếu tố + khối ngoại: ${m(r.portfolio.foreign)}`,
+    `  VN-Index:              tổng ${pc(r.portfolio.index)}`,
+    `  Từng kỳ (mới − cũ): ${r.periods.diff >= 0 ? '+' : ''}${pc(r.periods.diff, 2)}/kỳ (t ${fx(r.periods.t)}; nửa đầu ${pc(r.periods.first, 2)} / nửa sau ${pc(r.periods.second, 2)}) · hơn ở ${r.periods.wins}/${r.periods.periods} kỳ`,
+    '',
+    `Kết luận theo quy tắc đặt trước: ${r.verdict === 'adopt' ? 'CHẤP NHẬN — đưa khối ngoại vào điểm xếp hạng' : r.verdict === 'reject' ? 'KHÔNG CHẤP NHẬN — giữ điểm 4 yếu tố' : 'chưa đủ mẫu'}`,
+  ].join('\n');
+}
+
+/** Cùng quy tắc với ROE (roeVerdict): IC tăng t ≥ 2 ở cả hai nửa và danh mục hơn ở cả hai nửa. Lưu data/foreign_research.json. */
+export async function runForeignTest({ years = 8, log = console.log } = {}) {
+  const foreign = await loadForeign();
+  const panel = await loadPanel({ years });
+  log(`Giá: ${Object.keys(panel.data).length} mã, khối ngoại: ${Object.keys(foreign).length} mã`);
+  for (const [s, d] of Object.entries(panel.data)) {
+    const f = foreignReader(d.bars, foreign[s] || new Map());
+    const base = d.read;
+    d.ex = 'HOSE'; // thiếu dòng này mô phỏng danh mục ra NaN (biên độ trần/sàn không xác định)
+    d.read = (i) => { const x = base(i); return x ? { ...x, fnet: f(i) } : null; };
+    d.panel = d.read;
+  }
+  const V1 = FACTORS, V2 = [...FACTORS, FOREIGN_FACTOR];
+  const samples = buildSamples(panel.cal, panel.data, { start: panel.start, minValue: panel.minValue, members: panel.members, horizons: [20] });
+  const ic = compareIc(samples, V1, V2, 20, panel.step);
+  const alone = compareIc(samples, V1, [FOREIGN_FACTOR], 20, panel.step).b;
+  const sim = (factors) => simulateRankPortfolio(panel.cal, panel.data, {
+    start: panel.start, top: PORTFOLIO_RULE.top, rebalance: PORTFOLIO_RULE.rebalance, buffer: PORTFOLIO_RULE.buffer,
+    trendFilter: true, regime: 'none', factors, earnings: false, minValue: panel.minValue, initialCash: 1e8, members: panel.members,
+  });
+  const a = sim(V1), b = sim(V2);
+  const metrics = (s) => calcMetrics(s.equity.map((e) => e.value), s.trades, 1e8);
+  const periods = comparePeriods(a.periods, b.periods);
+  const rep = {
+    from: a.equity[0]?.time, to: a.equity.at(-1)?.time, ic, alone,
+    portfolio: { v1: metrics(a), foreign: metrics(b), index: a.equity.at(-1).index / a.equity[0].index - 1 },
+    periods, verdict: roeVerdict(ic, periods), builtAt: new Date().toISOString(),
+  };
+  await writeFile(join(dirname(FILE), 'foreign_research.json'), JSON.stringify(rep), 'utf8');
+  return rep;
+}

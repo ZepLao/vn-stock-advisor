@@ -12,8 +12,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/components.css?v=68">
-  <link rel="stylesheet" href="/style.css?v=68">
+  <link rel="stylesheet" href="/components.css?v=93">
+  <link rel="stylesheet" href="/style.css?v=93">
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -103,6 +103,12 @@
 
     <div class="header-sub">
       <nav class="topbar-nav-btns" aria-label="Chức năng chính">
+        <button type="button" id="side-toggle" class="nav-link side-toggle" aria-pressed="true" title="Ẩn/hiện danh sách mã bên trái">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg><span>Danh sách mã</span>
+        </button>
+        <button type="button" id="mk-btn" class="nav-link picks-btn">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-6"/></svg>Thị trường
+        </button>
         <button type="button" id="picks-btn" class="nav-link picks-btn">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>Tiềm năng
         </button>
@@ -276,6 +282,18 @@
         </div>
       </div>
 
+      <!-- Thị trường hôm nay -->
+      <div id="marketview" class="picks-view" hidden>
+        <div class="page-head mk-head">
+          <div>
+            <h1 class="picks-title">Thị trường hôm nay</h1>
+            <div id="mk-sub" class="muted small"></div>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" id="mk-refresh">↻ Cập nhật</button>
+        </div>
+        <div id="mk-body" class="mk-body"></div>
+      </div>
+
       <!-- Cổ phiếu tiềm năng -->
       <div id="picks" class="picks-view" hidden>
         <section class="card picks-head">
@@ -422,6 +440,10 @@
             </div>
             <button type="button" class="btn btn-secondary btn-sm" id="pf-refresh">↻ Cập nhật giá</button>
           </div>
+        </section>
+        <div class="pf-forms">
+        <section class="card">
+          <div class="card-head"><div><h3>🧾 Ghi lệnh mua / bán</h3><div class="muted small">Lệnh đã khớp ở công ty chứng khoán</div></div></div>
           <form id="pf-form" class="bt-form">
             <label><span>Lệnh</span><select name="type"><option value="BUY">Mua</option><option value="SELL">Bán</option></select></label>
             <label><span>Mã</span><input name="symbol" maxlength="10" required placeholder="FPT" autocapitalize="characters"></label>
@@ -453,6 +475,7 @@
             <button type="submit" class="btn btn-primary btn-sm">+ Ghi</button>
           </form>
         </section>
+        </div>
         <div id="pf-body"></div>
       </div>
 
@@ -468,6 +491,7 @@
           </div>
           <div id="at-summary"></div>
         </section>
+        <section class="card sc-card" id="at-score" hidden></section>
         <div id="at-body"></div>
       </div>
 
@@ -507,61 +531,51 @@
           <span class="mobile-back-sym" id="mobile-back-sym"></span>
         </div>
 
-        <section class="card hero-card">
-          <div class="hero-left">
-            <div class="sym-line">
+        <!-- Quyết định nhanh: đọc trong 10 giây -->
+        <section class="card quick-card" id="quick-card">
+          <div class="qc-head">
+            <div class="qc-id">
               <h1 id="r-symbol" class="symbol-title"></h1>
               <span id="r-exchange" class="tag exchange-tag"></span>
-              <span id="r-live-tag" class="tag live-tag">● Trực tuyến</span>
+              <span id="r-name" class="qc-name"></span>
             </div>
-            <div id="r-name" class="company-name"></div>
-            <div class="price-line">
+            <div class="qc-price">
               <span id="r-price" class="current-price"></span>
               <div id="r-change-badge" class="change-badge"><span id="r-change"></span></div>
             </div>
-            <div id="r-date" class="date-source-line muted small"></div>
           </div>
+          <div id="r-date" class="qc-date"></div>
 
-          <div class="hero-center">
-            <div class="rec-score-row">
-              <div class="metric-pill"><span class="pill-label">Điểm xếp hạng</span><span class="pill-val"><b id="r-total"></b></span></div>
-              <div class="metric-pill"><span class="pill-label">Hạng trong rổ</span><span class="pill-val"><b id="r-conf"></b></span></div>
-              <div id="pill-math-win" class="metric-pill" title="Xác suất thắng theo mô hình thống kê"><span class="pill-label">Xác suất thắng</span><span class="pill-val"><b id="r-math-win">--%</b></span></div>
-              <div id="pill-math-ev" class="metric-pill" title="Kỳ vọng lợi nhuận EV"><span class="pill-label">Kỳ vọng EV</span><span class="pill-val"><b id="r-math-ev">--%</b></span></div>
-            </div>
+          <div class="qc-verdict-row">
+            <div id="qc-verdict" class="qc-verdict"></div>
+            <p id="qc-action" class="qc-action"></p>
           </div>
+          <div id="qc-hold" class="qc-hold" hidden></div>
+          <div id="qc-tiles" class="qc-tiles"></div>
+          <ul id="qc-why" class="qc-why"></ul>
 
-          <div class="hero-right">
-            <div id="r-rec" class="recommendation-badge"></div>
-            <p id="r-desc" class="rec-desc"></p>
-            <div class="hero-actions">
-              <button type="button" id="watch-btn" class="btn btn-primary btn-sm"></button>
-              <button type="button" id="btn-20-rules" class="btn btn-secondary btn-sm" title="20 nguyên tắc đầu tư và kỷ luật">📜 20 quy tắc</button>
-              <button type="button" id="btn-open-json-modal" class="btn btn-secondary btn-sm" style="display:none">Xem JSON</button>
-              <button type="button" id="copy-json-hero" class="btn btn-secondary btn-sm" style="display:none">Copy JSON</button>
-              <button type="button" id="test-alert-hero" class="btn btn-secondary btn-sm" style="display:none">🔔 Test</button>
-            </div>
+          <div class="qc-actions">
+            <button type="button" id="watch-btn" class="btn btn-primary btn-sm"></button>
+            <button type="button" id="qc-alert-btn" class="btn btn-secondary btn-sm">🔔 Đặt cảnh báo giá</button>
+            <button type="button" id="btn-20-rules" class="btn btn-ghost btn-sm" title="20 nguyên tắc đầu tư và kỷ luật">📜 20 quy tắc</button>
+            <button type="button" id="btn-open-json-modal" class="btn btn-secondary btn-sm" style="display:none">Xem JSON</button>
+            <button type="button" id="copy-json-hero" class="btn btn-secondary btn-sm" style="display:none">Copy JSON</button>
+            <button type="button" id="test-alert-hero" class="btn btn-secondary btn-sm" style="display:none">🔔 Test</button>
+          </div>
+          <!-- Các ô cũ vẫn được điền bởi mã hiện có, giữ ẩn -->
+          <div hidden>
+            <span id="r-live-tag"></span><div id="r-rec"></div><p id="r-desc"></p>
+            <b id="r-total"></b><b id="r-conf"></b>
+            <div id="pill-exp-win"><b id="r-exp-win"></b></div><div id="pill-exp-ex"><b id="r-exp-ex"></b></div>
+            <div id="r-warnings"></div><div id="r-market-gate"></div><section id="r-hold"></section>
           </div>
         </section>
 
-        <div id="r-warnings" class="warnings-container"></div>
-
-        <div class="report-cockpit-grid">
-          <div class="cockpit-primary">
-            <section class="card brief-card" id="brief-card" aria-label="Tóm tắt nhanh"></section>
-
-            <section class="card chart-card" id="chart-card">
-              <div class="card-head">
-                <div class="chart-title-group">
-                  <h3>Biểu đồ kỹ thuật &amp; dự báo</h3>
-                  <div class="series-key">
-                    <span class="key-item"><i class="sw s1"></i>MA20</span>
-                    <span class="key-item"><i class="sw s2"></i>MA50</span>
-                    <span class="key-item"><i class="sw s3"></i>MA200</span>
-                    <span class="key-item"><i class="sw sw-fc"></i>Dự báo 20 phiên</span>
-                    <span class="key-item"><i class="sw sw-ce"></i>Ngưỡng thoát −15%</span>
-                    <span class="key-item"><i class="sw vol"></i>Khối lượng</span>
-                  </div>
+        <section class="card chart-card" id="chart-card">
+              <div class="chart-head">
+                <div>
+                  <h3>Biểu đồ giá</h3>
+                  <div class="muted small" id="chart-sub">Nến, đường trung bình, khối lượng và dải dao động 20 phiên tới</div>
                 </div>
                 <div class="chart-controls">
                   <div class="seg" id="chart-tf" role="group" aria-label="Khung nến">
@@ -572,79 +586,38 @@
                   <div class="seg" id="range" role="group" aria-label="Phạm vi hiển thị"></div>
                 </div>
               </div>
-              <div class="legend" id="chart-legend"></div>
+              <div class="qstrip" id="chart-legend" aria-live="off"></div>
+              <div class="layer-chips" id="chart-layers" role="group" aria-label="Lớp hiển thị"></div>
               <div id="chart" class="chart"></div>
+              <p class="chart-foot muted small" id="chart-foot"></p>
             </section>
 
-            <section class="card horizon-card" id="horizon-card">
-              <div class="card-head">
-                <div class="hz-head-title">
-                  <h3>Thời gian nắm giữ mục tiêu</h3>
-                  <span class="badge-subtle" id="horizon-badge">T+2 đến 2 tuần</span>
-                </div>
-              </div>
-              <div class="horizon-selector chip-scroll" id="horizon-selector">
-                <button type="button" class="btn-hz-option on" data-horizon="T_PLUS_2">T+2 – 2 tuần</button>
-                <button type="button" class="btn-hz-option" data-horizon="ONE_MONTH">1 tháng</button>
-                <button type="button" class="btn-hz-option" data-horizon="THREE_MONTHS">3 tháng</button>
-                <button type="button" class="btn-hz-option" data-horizon="SIX_MONTHS">6 tháng+</button>
-              </div>
-              <p class="muted small hz-desc">
-                <span id="hz-question-text">Tập trung vào: dòng tiền phiên gần nhất, điểm nổ vol, hỗ trợ ngắn hạn và chu kỳ thanh toán T+2.</span>
-                <span id="hz-weights-text" class="hz-weights-detail">Tỷ trọng: Kỹ thuật 40% · Dòng tiền 35% · Khối ngoại 15% · Cơ bản 10%</span>
-              </p>
-            </section>
-
-            <section class="card flow-card" id="flow-card" aria-label="Phe mua phe bán 10 phiên" hidden></section>
-          </div>
-
-          <div class="cockpit-secondary">
-            <details class="card deep-dive-panel" id="deep-dive-panel" open>
-              <summary class="deep-dive-summary">
-                <span class="deep-dive-text">
-                  <span class="deep-dive-title">Phân tích chuyên sâu</span>
-                  <span class="deep-dive-sub">AI, hội đồng đầu tư, BCTC, khối ngoại, tin tức, backtest</span>
-                </span>
-                <svg class="deep-dive-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
-              </summary>
-              <div class="deep-dive-body">
-                <nav class="report-nav" id="report-nav" aria-label="Mục phân tích">
-                  <button type="button" class="nav-tab on" data-target="sec-decision">Căn cứ</button>
-                  <button type="button" class="nav-tab" data-target="sec-ai">AI</button>
-                  <button type="button" class="nav-tab" data-target="sec-committee">Hội đồng</button>
-                  <button type="button" class="nav-tab" data-target="sec-fund">BCTC</button>
-                  <button type="button" class="nav-tab" data-target="sec-foreign">Khối ngoại</button>
-                  <button type="button" class="nav-tab" data-target="sec-news">Tin tức</button>
-                  <button type="button" class="nav-tab" data-target="sec-backtest">Backtest</button>
-                  <button type="button" class="nav-tab" data-target="sec-overview">7 nhóm</button>
-                  <button type="button" class="nav-tab" data-target="sec-alerts">Cảnh báo</button>
-                  <button type="button" class="nav-tab tab-all" data-target="all">Tất cả</button>
-                </nav>
-
-                <!-- Căn cứ chi tiết -->
-                <div id="sec-decision" class="report-section active">
-                  <section class="card decision-card" id="decision-card">
-                    <h3 class="dc-title">Căn cứ chi tiết <span class="muted small">· dòng tiền, khối ngoại, luận điểm và rủi ro</span></h3>
+        <div class="folds" id="folds">
+          <div class="folds-head"><h2>Chi tiết</h2><span class="muted small">Bấm vào mục để mở</span>
+            <button type="button" class="btn btn-ghost btn-xs" id="folds-toggle">Mở tất cả</button></div>
+          <details class="card fold" id="sec-plan">
+            <summary><span class="fold-title">📋 Kế hoạch giao dịch</span><span class="fold-sum" id="sec-plan-sum"></span><span class="fold-chev" aria-hidden="true"></span></summary>
+            <div class="fold-body">
+              <section class="card brief-card" id="brief-card" aria-label="Tóm tắt nhanh"></section>
+            </div>
+          </details>
+          <details class="card fold fold-grid" id="sec-decision">
+            <summary><span class="fold-title">✅ Căn cứ đã kiểm định</span><span class="fold-sum" id="sec-decision-sum"></span><span class="fold-chev" aria-hidden="true"></span></summary>
+            <div class="fold-body">
+              <section class="card decision-card" id="decision-card">
+                    <h3 class="dc-title">Căn cứ chi tiết <span class="muted small">· chỉ dùng các yếu tố đã kiểm định trên dữ liệu nhiều năm</span></h3>
                     <div class="dc-grid">
                       <div class="dc-box"><h4>Dòng tiền &amp; khối ngoại (phiên gần nhất)</h4><div id="dc-flow"></div></div>
-                      <div class="dc-box"><h4>Điều kiện cần theo dõi</h4><div id="dc-watch" class="dc-watch"></div></div>
+                      <div class="dc-box"><h4>Thị trường &amp; điều kiện mua</h4><div id="dc-watch" class="dc-watch"></div></div>
                     </div>
                     <div class="dc-grid">
-                      <div class="dc-box dc-list"><h4 class="up">▲ Luận điểm ủng hộ mua</h4><ul id="dc-pros"></ul></div>
-                      <div class="dc-box dc-list"><h4 class="down">▼ Rủi ro cần cảnh giác</h4><ul id="dc-cons"></ul></div>
+                      <div class="dc-box dc-list"><h4 class="up">▲ Điểm mạnh (đã kiểm định)</h4><ul id="dc-pros"></ul></div>
+                      <div class="dc-box dc-list"><h4 class="down">▼ Rủi ro (đã kiểm định)</h4><ul id="dc-cons"></ul></div>
                     </div>
                   </section>
 
                   <section class="card rank-card" id="rank-card"></section>
-                  <section class="scores" id="r-scores"></section>
-
-                  <div class="grid2">
-                    <section class="card signals-card">
-                      <div class="card-head"><h3>Tín hiệu &amp; luận điểm</h3><span class="badge-subtle">Quy tắc định lượng</span></div>
-                      <div id="r-signals"></div>
-                    </section>
-                    <div class="stack">
-                      <section class="card plan-card" id="plan-card">
+                                        <section class="card plan-card" id="plan-card">
                         <div class="card-head"><h3>Mức giá &amp; luật nắm giữ</h3><span class="badge-subtle">Luật đo tốt nhất (4 năm)</span></div>
                         <div id="r-plan" class="kv"></div>
                         <p class="muted small plan-footnote">Luật nắm giữ: bán khi đóng cửa dưới −15% giá vốn, giữ 40 phiên rồi xem lại, không chốt lời theo mốc. Bộ đo 4 năm cho thấy cắt sát 2×ATR, dời về hòa vốn hay cắt lỗ đuổi đều làm lãi giảm; các mức ATR chỉ để biết biên độ rung lắc. Đơn vị: nghìn VNĐ.</p>
@@ -653,30 +626,18 @@
                         <div class="card-head"><h3>Chỉ báo kỹ thuật</h3></div>
                         <div id="r-ind" class="kv"></div>
                       </section>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Khối ngoại -->
-                <div id="sec-foreign" class="report-section">
-                  <section class="card foreign-card" id="foreign-card">
-                    <div class="card-head"><h3>Khối ngoại 20 phiên gần nhất</h3><span id="foreign-summary" class="badge-subtle"></span></div>
-                    <div id="foreign-chart" class="foreign-chart"></div>
-                    <div id="foreign-stats" class="foreign-stats"></div>
-                  </section>
-                </div>
-
-                <!-- 7 nhóm tín hiệu -->
-                <div id="sec-overview" class="report-section">
-                  <section class="card overview-card" id="overview-card">
-                    <div class="card-head"><h3>Đánh giá nhanh theo 7 nhóm tín hiệu</h3><span class="badge-subtle">Xác nhận chéo</span></div>
-                    <div id="overview-grid" class="overview-grid"></div>
-                  </section>
-                </div>
-
-                <!-- AI -->
-                <div id="sec-ai" class="report-section">
-                  <section class="card ai-card" id="ai-card">
+            </div>
+          </details>
+          <details class="card fold" id="sec-flow">
+            <summary><span class="fold-title">🔍 Phe mua – phe bán 10 phiên</span><span class="fold-sum" id="sec-flow-sum"></span><span class="fold-chev" aria-hidden="true"></span></summary>
+            <div class="fold-body">
+              <section class="card flow-card" id="flow-card" aria-label="Phe mua phe bán 10 phiên" hidden></section>
+            </div>
+          </details>
+          <details class="card fold" id="sec-ai">
+            <summary><span class="fold-title">✦ AI soát rủi ro</span><span class="fold-sum" id="sec-ai-sum"></span><span class="fold-chev" aria-hidden="true"></span></summary>
+            <div class="fold-body">
+              <section class="card ai-card" id="ai-card">
                     <div class="card-head">
                       <div class="ai-brand-head">
                         <span class="ai-sparkle" aria-hidden="true">✦</span>
@@ -689,11 +650,12 @@
                     </div>
                     <div id="ai-body" class="ai-body-content"></div>
                   </section>
-                </div>
-
-                <!-- Hội đồng đầu tư -->
-                <div id="sec-committee" class="report-section">
-                  <section class="card" id="cm-card">
+            </div>
+          </details>
+          <details class="card fold" id="sec-committee">
+            <summary><span class="fold-title">⚖️ Hội đồng đầu tư</span><span class="fold-sum" id="sec-committee-sum"></span><span class="fold-chev" aria-hidden="true"></span></summary>
+            <div class="fold-body">
+              <section class="card" id="cm-card">
                     <div class="card-head">
                       <div>
                         <h3>Hội đồng đầu tư <span class="muted small">· phe mua ⇄ phe bán → giám đốc đầu tư</span></h3>
@@ -703,63 +665,12 @@
                     </div>
                     <div id="cm-body"></div>
                   </section>
-                </div>
-
-                <!-- Backtest & dự báo -->
-                <div id="sec-backtest" class="report-section">
-                  <section class="card" id="fc-card">
-                    <div class="card-head">
-                      <div>
-                        <h3>Quá khứ → tương lai: dự báo giá &amp; lời/lỗ</h3>
-                        <div class="muted small">Giá thật, các lần dự báo trước so với thực tế, và dự báo các phiên tới: dải dao động thống kê + 3 kịch bản AI. Lời/lỗ tính theo vốn của bạn, đã trừ phí và thuế.</div>
-                      </div>
-                      <div class="fc-controls">
-                        <div class="seg" id="fc-h" role="group" aria-label="Số phiên dự báo">
-                          <button type="button" data-h="5">5</button>
-                          <button type="button" data-h="10">10</button>
-                          <button type="button" data-h="20" class="on">20</button>
-                          <button type="button" data-h="60">60 phiên</button>
-                        </div>
-                        <label class="cap-input">Vốn <input id="fc-capital" type="number" min="1" step="10" inputmode="decimal"> triệu</label>
-                        <button type="button" class="btn btn-secondary btn-sm" id="fc-ai">✦ AI dự báo lại</button>
-                      </div>
-                    </div>
-                    <div id="fc-body"></div>
-                  </section>
-                  <section class="card" id="bt-card">
-                    <div class="card-head">
-                      <div>
-                        <h3>Backtest chiến lược</h3>
-                        <div class="muted small">Luật thị trường VN: T+2, biên độ trần/sàn, lô 100 cp, phí 0,15%/chiều, thuế bán 0,1%. Tín hiệu theo giá đóng cửa, khớp giá mở cửa phiên sau.</div>
-                      </div>
-                    </div>
-                    <form id="bt-form" class="bt-form">
-                      <label><span>Chiến lược</span><select name="strategy" id="bt-strategy"></select></label>
-                      <label><span>Số năm</span><select name="years"><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option><option value="4">4</option></select></label>
-                      <span id="bt-params" class="bt-params"></span>
-                      <label><span>Cắt lỗ %</span><input name="stop" type="number" min="0" max="50" step="0.5" placeholder="không" inputmode="decimal"></label>
-                      <label><span>Chốt lời %</span><input name="take" type="number" min="0" max="200" step="1" placeholder="không" inputmode="decimal"></label>
-                      <label><span>Tỷ trọng %</span><input name="position" type="number" min="10" max="100" step="10" value="100" inputmode="numeric"></label>
-                      <button type="submit" class="btn btn-primary btn-sm" id="bt-run">▶ Chạy backtest</button>
-                    </form>
-                    <p id="bt-desc" class="muted small bt-desc"></p>
-                    <div id="bt-body"></div>
-                  </section>
-                  <div id="verify-sim-box"></div>
-                </div>
-
-                <!-- BCTC -->
-                <div id="sec-fund" class="report-section">
-                  <section class="card fundamentals-card" id="fund-card">
-                    <div class="card-head"><h3>Chỉ số tài chính &amp; báo cáo cơ bản</h3><span id="r-fund-date" class="muted small"></span></div>
-                    <div id="r-fund" class="fund-grid"></div>
-                  </section>
-                  <section class="card biz-card" id="biz-card" hidden></section>
-                </div>
-
-                <!-- Tin tức -->
-                <div id="sec-news" class="report-section">
-                  <section class="card news-card">
+            </div>
+          </details>
+          <details class="card fold" id="sec-news">
+            <summary><span class="fold-title">📰 Tin tức</span><span class="fold-sum" id="sec-news-sum"></span><span class="fold-chev" aria-hidden="true"></span></summary>
+            <div class="fold-body">
+              <section class="card news-card">
                     <div class="card-head">
                       <div class="news-head-left"><h3>Tin tức &amp; tâm lý thị trường</h3><span id="r-news-count" class="muted small"></span></div>
                       <div class="seg" id="news-filter" role="group" aria-label="Lọc tin">
@@ -771,11 +682,32 @@
                     </div>
                     <ul id="r-news" class="news"></ul>
                   </section>
-                </div>
-
-                <!-- Cảnh báo giá -->
-                <div id="sec-alerts" class="report-section">
-                  <section class="card alert-setting-card" id="alert-form-card">
+            </div>
+          </details>
+          <details class="card fold" id="sec-fund">
+            <summary><span class="fold-title">🏢 BCTC & doanh nghiệp</span><span class="fold-sum" id="sec-fund-sum"></span><span class="fold-chev" aria-hidden="true"></span></summary>
+            <div class="fold-body">
+              <section class="card fundamentals-card" id="fund-card">
+                    <div class="card-head"><h3>Chỉ số tài chính &amp; báo cáo cơ bản</h3><span id="r-fund-date" class="muted small"></span></div>
+                    <div id="r-fund" class="fund-grid"></div>
+                  </section>
+                  <section class="card biz-card" id="biz-card" hidden></section>
+            </div>
+          </details>
+          <details class="card fold" id="sec-foreign">
+            <summary><span class="fold-title">🌏 Khối ngoại 20 phiên</span><span class="fold-sum" id="sec-foreign-sum"></span><span class="fold-chev" aria-hidden="true"></span></summary>
+            <div class="fold-body">
+              <section class="card foreign-card" id="foreign-card">
+                    <div class="card-head"><h3>Khối ngoại 20 phiên gần nhất</h3><span id="foreign-summary" class="badge-subtle"></span></div>
+                    <div id="foreign-chart" class="foreign-chart"></div>
+                    <div id="foreign-stats" class="foreign-stats"></div>
+                  </section>
+            </div>
+          </details>
+          <details class="card fold" id="sec-alerts">
+            <summary><span class="fold-title">🔔 Cảnh báo giá</span><span class="fold-sum" id="sec-alerts-sum"></span><span class="fold-chev" aria-hidden="true"></span></summary>
+            <div class="fold-body">
+              <section class="card alert-setting-card" id="alert-form-card">
                     <div class="card-head"><h3>Cảnh báo giá cho <span id="af-symbol" class="accent-text"></span></h3></div>
                     <div class="alert-presets">
                       <span class="preset-label">Mẫu nhanh theo giá hiện tại:</span>
@@ -795,10 +727,8 @@
                       <button type="submit" class="btn btn-primary" id="af-submit">Lưu &amp; theo dõi</button>
                     </form>
                   </section>
-                </div>
-              </div>
-            </details>
-          </div>
+            </div>
+          </details>
         </div>
       </div>
 
@@ -909,6 +839,6 @@
     <div class="tooltip-action" id="tt-action">Bấm để phân tích</div>
   </div>
 
-  <script src="/app.js?v=68" type="module"></script>
+  <script src="/app.js?v=93" type="module"></script>
 </body>
 </html>

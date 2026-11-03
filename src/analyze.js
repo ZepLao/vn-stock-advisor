@@ -739,7 +739,7 @@ export async function analyzeSymbol(symbol, { withChart = true } = {}) {
     updatedAt: new Date().toISOString(),
     price: {
       close: lastBar.close, open: lastBar.open, high: lastBar.high, low: lastBar.low,
-      volume: lastBar.volume, date: lastBar.time, source,
+      volume: lastBar.volume, date: lastBar.time, source, partial: !!lastBar.partial,
       change: round(lastBar.close - prevBar.close),
       changePct: round(((lastBar.close - prevBar.close) / prevBar.close) * 100),
     },

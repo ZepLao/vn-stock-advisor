@@ -77,14 +77,14 @@
 
 .ai-levels {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 8px;
   margin-bottom: 14px;
 }
 
 .ai-lists {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex; flex-wrap: wrap;
+  /* mỗi hàng tự giãn đủ bề ngang, không để ô trống */
   gap: 14px 20px;
 }
 @media (max-width: 760px) { .ai-lists { grid-template-columns: 1fr; } }
@@ -339,7 +339,7 @@
    ========================================================================== */
 .fund-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 10px;
 }
 
@@ -628,7 +628,7 @@
 .movers-empty { font-size: 12px; color: var(--muted); padding: 12px; text-align: center; }
 
 /* Tổng hợp nhanh */
-.overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
 .ov-item {
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -699,7 +699,7 @@
 .pk-market-stats { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); }
 .pk-market-stats b { font-family: var(--font-mono); }
 .pk-market-view { font-size: 14px; line-height: 1.55; background: var(--accent-bg); border-radius: var(--radius-md); padding: 10px 14px; }
-.pk-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 14px; }
+.pk-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 14px; }
 @media (max-width: 560px) { .pk-list { grid-template-columns: 1fr; } }
 .pk-card {
   display: flex;
@@ -858,7 +858,7 @@
 .rk-score.up b, .rk-score.up div { color: var(--up-text); }
 .rk-score.down b, .rk-score.down div { color: var(--down-text); }
 .rk-score.ref b, .rk-score.ref div { color: var(--ref); }
-.rk-factors { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 18px; }
+.rk-factors { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px 18px; }
 .rk-factor { display: grid; grid-template-columns: 1fr 34px; gap: 4px 8px; align-items: center; }
 .rk-factor .k { grid-column: 1 / -1; font-size: 12px; color: var(--ink-2); }
 .rk-factor .v { font-family: var(--font-mono); font-weight: 700; font-size: 12px; text-align: right; }
@@ -1960,7 +1960,7 @@
 .pk-sum-table tr:hover td {
   background: var(--surface-3);
 }
-.pk-sec-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.pk-sec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
 .pk-sec { background: var(--surface-2); border-radius: var(--radius-sm); padding: 8px 10px; }
 .pk-sec-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; font-size: 13px; }
 .pk-sec ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
@@ -2005,7 +2005,7 @@
 .bf-ai.down { border-left-color: var(--down); background: var(--down-bg); }
 .bf-ai.ref { border-left-color: var(--ref); }
 .bf-ai .btn { margin-left: 6px; }
-.bf-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px 14px; }
+.bf-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 6px 14px; }
 .bf-check { display: grid; grid-template-columns: 14px auto 1fr; gap: 6px; align-items: baseline; font-size: 12.5px; }
 .bf-check b { white-space: nowrap; }
 .bf-check span:last-child { color: var(--ink-2); }
@@ -2136,3 +2136,6 @@
   font-weight: 500;
 }
 
+.grid2.grid2-single { grid-template-columns: minmax(0, 1fr); }
+
+.ai-lists > * { flex: 1 1 280px; min-width: 0; }
