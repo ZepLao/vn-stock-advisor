@@ -19,10 +19,14 @@ test('Mức theo dõi như bản tin: ngưỡng cảnh báo xa từ giá vốn, 
   assert.equal(holdLevels({ brief: {} }), null);
 });
 
-test('Cảnh báo mã đang giữ: chỉ khẩn (dưới −15%, sát sàn, rủi ro rơi tự do), mỗi loại một lần', () => {
+test('Cảnh báo mã đang giữ: dưới −15%, còn ≤ 5% là chạm ngưỡng, sát sàn, rủi ro rơi tự do; mỗi loại một lần', () => {
   const lv = { stop: 22.8 };
   assert.deepEqual(holdingEvents({ close: 24, prevClose: 23.9, ...lv }), []); // bình thường
-  assert.deepEqual(holdingEvents({ close: 23.1, prevClose: 24.4, ...lv }), []); // giảm 5,3%, gần ngưỡng: không báo (nhiễu)
+  const near = holdingEvents({ close: 23.1, prevClose: 24.4, ...lv }); // còn 1,3% là chạm ngưỡng: báo trước một lần
+  assert.deepEqual(keys(near), ['near']);
+  assert.match(near[0].text, /Còn 1,3% là chạm ngưỡng cảnh báo 22,8/);
+  assert.deepEqual(holdingEvents({ close: 23.1, prevClose: 24.4, ...lv }, ['near']), []); // đã báo hôm nay
+  assert.deepEqual(holdingEvents({ close: 24.2, prevClose: 25.5, ...lv }), []); // giảm 5%, còn cách ngưỡng 6%: không báo (nhiễu)
   assert.deepEqual(holdingEvents({ close: 26.2, prevClose: 25, ...lv }), []); // tăng mạnh: không báo
   const broke = holdingEvents({ close: 22.5, prevClose: 23.9, ...lv });
   assert.deepEqual(keys(broke), ['stop']);

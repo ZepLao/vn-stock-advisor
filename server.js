@@ -16,13 +16,14 @@ import { getRankBoard, runRankPortfolio } from './src/ranking.js';
 import { runLiveBacktest } from './src/livebacktest.js';
 import { runRollingPortfolio } from './src/rolling.js';
 import { evaluatePredictions } from './src/predictions.js';
+import { getScorecard } from './src/scorecard.js';
 import { getVerification } from './src/verify.js';
 import { startHistorySchedule, listSnapshots } from './src/history.js';
 import { getSectorFlows } from './src/sectors.js';
 import { getChartSeries } from './src/chartdata.js';
 import { startFlowCapture } from './src/orderflow.js';
 import { getForecast } from './src/forecast.js';
-import { telegramConfig, sendReport, buildReport, startTelegramSchedule, sendMessage } from './src/telegram.js';
+import { telegramConfig, sendReport, buildReport, startTelegramSchedule, sendMessage, holdingsAdviceNow } from './src/telegram.js';
 import { startSelfReview, runSelfReview, lastReview } from './src/selfreview.js';
 import { getTuning, tuningLog } from './src/tuning.js';
 import { getMarketRegime } from './src/regime.js';
@@ -181,6 +182,7 @@ const routes = [
     send(res, 200, await runRollingPortfolio({ years: q.years, initialCash: q.cash, ...(q.sizing ? { sizing: q.sizing } : {}), ...(q.stop ? { stopPct: Number(q.stop) } : {}) }));
   }],
   ['GET', /^\/api\/predictions$/, async (req, res) => send(res, 200, await evaluatePredictions())],
+  ['GET', /^\/api\/scorecard$/, async (req, res) => send(res, 200, await getScorecard())],
   // Kiểm chứng các giả thuyết chọn trước (IC, nhóm mua, độ phủ dải, AI so với luật) kèm t Newey-West
   ['GET', /^\/api\/verification$/, async (req, res) => send(res, 200, await getVerification())],
   ['GET', /^\/api\/history$/, async (req, res) => send(res, 200, { dates: await listSnapshots() })],
@@ -202,6 +204,8 @@ const routes = [
   ['POST', /^\/api\/autotrade\/run$/, async (req, res) => { await runAutoTrade(); send(res, 200, await getAutoTrade()); }],
   // Danh mục đầu tư thực tế
   ['GET', /^\/api\/portfolio$/, async (req, res) => send(res, 200, await getPortfolio())],
+  // Phân tích rủi ro từng mã đang nắm (giống bản tin 15:10, không gọi AI)
+  ['GET', /^\/api\/portfolio\/advice$/, async (req, res) => send(res, 200, await holdingsAdviceNow())],
   ['POST', /^\/api\/portfolio\/tx$/, async (req, res) => {
     try {
       send(res, 200, await addTransaction(await readBody(req)));

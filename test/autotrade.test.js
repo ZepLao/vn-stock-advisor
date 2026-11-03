@@ -126,7 +126,7 @@ test('stepSession: độ rộng thị trường dưới 50% thì không mua mớ
   assert.ok(open.pendingBuy.length > 0, 'tắt bộ lọc thì vẫn mua');
 });
 
-test('formatAutoTradeMessage: báo lệnh đã khớp, lệnh phiên tới và tài sản; không có gì thì không gửi', () => {
+test('formatAutoTradeMessage: báo lệnh đã khớp, lệnh phiên tới, tài sản; phiên không giao dịch gửi tin ngắn', () => {
   const data = makeData();
   const st = newAccount(5_000_000, day(START - 1));
   stepSession(st, { date: day(START), index: 1000, data, universe: null, minValue: 1e9, sectorOf });
@@ -140,5 +140,8 @@ test('formatAutoTradeMessage: báo lệnh đã khớp, lệnh phiên tới và t
   assert.match(m2, /Đang giữ \d+ mã/);
   assert.match(m2, /VN-Index cùng kỳ \+1%/);
   stepSession(st, { date: day(START + 2), index: 1010, data, universe: null, minValue: 1e9, sectorOf });
-  assert.equal(formatAutoTradeMessage(st, [day(START + 2)]), null, 'phiên không khớp lệnh, không quyết định: không gửi');
+  const quiet = formatAutoTradeMessage(st, [day(START + 2)]);
+  assert.match(quiet, /Hôm nay không giao dịch: đang giữ vị thế/, 'phiên không giao dịch vẫn gửi tin ngắn');
+  assert.match(quiet, /Lần ra quyết định tiếp theo: sau phiên thứ 3 kể từ hôm nay/);
+  assert.doesNotMatch(quiet, /ĐÃ KHỚP|LỆNH PHIÊN TỚI/);
 });

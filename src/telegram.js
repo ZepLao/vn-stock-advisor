@@ -352,6 +352,30 @@ export function formatHoldingAdvice(list) {
   return L;
 }
 
+/**
+ * Phân tích các mã đang nắm ngay lúc này (cho trang Danh mục), cùng cách tính với bản tin 15:10 nhưng không gọi AI:
+ * bán / xem lại theo planOrders, mua thêm / giữ và rủi ro theo holdingAdvice.
+ */
+export async function holdingsAdviceNow() {
+  const { getPortfolio } = await import('./portfolio.js');
+  const { getMarketRegime } = await import('./regime.js');
+  const [pf, flows, regime] = await Promise.all([getPortfolio(), getSectorFlows(5).catch(() => null), getMarketRegime().catch(() => null)]);
+  const sectors = sectorMap(flows);
+  const core = coreConfig();
+  const syms = (pf?.holdings || []).map((h) => h.symbol).filter((s) => s !== core.symbol);
+  const held = (await analyzeAll(syms)).filter((a) => a.holding).map((a) => ({ a, sector: sectors.get(a.symbol)?.name }));
+  const plan = planOrders({ held, candidates: [], capital: pf?.capital?.nav ?? null, cash: null, buyCount: 0, slots: SLOT_RULES.slots });
+  const breadth = regime?.breadth?.pctAboveMa50 != null ? regime.breadth.pctAboveMa50 / 100 : null;
+  const sellWhy = new Map(plan.sells.map((s) => [s.symbol, s.reason]));
+  const reviewSet = new Set(plan.review.map((r) => r.symbol));
+  return {
+    updatedAt: new Date().toISOString(), breadth, regime: regime ? { label: regime.label, code: regime.regime } : null,
+    items: held.map(({ a }) => holdingAdvice(a, {
+      sell: sellWhy.get(a.symbol) ?? null, review: reviewSet.has(a.symbol), breadth, nav: pf?.capital?.nav ?? null, sector: sectors.get(a.symbol) ?? null,
+    })),
+  };
+}
+
 const REGIME_LABEL = { CONFIRMED_UPTREND: '🟢 tăng', UPTREND_UNDER_PRESSURE: '🟡 tăng có áp lực', MARKET_CORRECTION: '🔴 điều chỉnh', UNKNOWN: '⚪ chưa xác định (không mua mới)' };
 
 /** Bản tin sau phiên (hàm thuần). */
@@ -400,7 +424,7 @@ export function formatCloseReport({ date, market, regime, plan, summary = null, 
   const holding = plan.keep.length + plan.review.length + plan.sells.length;
   if (holding) {
     const perf = summary ? ` · ${summary.unrealizedPct >= 0 ? 'lãi' : 'lỗ'} <b>${sgn(summary.unrealizedPct)}</b> · hôm nay ${money(summary.dayChange)}` : '';
-    L.push('', D, `💼 <b>DANH MỤC</b> ${holding}/${slots} mã${perf}`);
+    L.push('', D, `💼 <b>DANH MỤC</b> ${slots ? `${holding}/${slots}` : holding} mã${perf}`);
     if (plan.advice?.length) L.push('🔎 <b>Phân tích từng mã đang nắm</b>', ...formatHoldingAdvice(plan.advice));
     else if (plan.keep.length) L.push(`Giữ: ${plan.keep.map((k) => `${esc(k.symbol)}${k.held != null ? ` ${k.held}/${N}` : ''}${k.pnlPct != null ? ` ${sgn(k.pnlPct * 100, 0)}` : ''}`).join(' · ')}`);
   }
@@ -426,13 +450,14 @@ export function formatMorning(plan, date) {
 const VERDICT_TXT = { insufficient: 'chưa đủ dữ liệu', supported: '✅ ủng hộ', rejected: '❌ bác bỏ', inconclusive: 'chưa kết luận' };
 
 /** Tổng kết tuần (hàm thuần). */
-export function formatWeekly({ date, summary = null, holdings = [], hypotheses = [], tuning = [], slots = SLOT_RULES.slots, capital = null }) {
+export function formatWeekly({ date, summary = null, holdings = [], hypotheses = [], tuning = [], slots = SLOT_RULES.slots, capital = null, score = [] }) {
   const L = [`📅 <b>TỔNG KẾT TUẦN · đến ${ddmm(date)}</b>`];
+  if (score.length) L.push('', ...score);
   if (capital?.nav && capital.source === 'portfolio') {
     L.push('', `💵 Vốn ${num(capital.netContributed / 1e6, 1)} tr · đã mua ${num((capital.invested ?? 0) / 1e6, 1)} tr · tiền mặt còn <b>${num(capital.cash / 1e6, 1)} tr</b>`);
   }
   if (summary) {
-    L.push('', `💼 Danh mục ${holdings.length}/${slots} mã · giá trị ${num(summary.marketValue / 1e6, 0)} tr · ${summary.unrealizedPct >= 0 ? 'lãi' : 'lỗ'} <b>${sgn(summary.unrealizedPct)}</b> chưa chốt · đã chốt ${money(summary.realized)}`);
+    L.push('', `💼 Danh mục ${slots ? `${holdings.length}/${slots}` : holdings.length} mã · giá trị ${num(summary.marketValue / 1e6, 0)} tr · ${summary.unrealizedPct >= 0 ? 'lãi' : 'lỗ'} <b>${sgn(summary.unrealizedPct)}</b> chưa chốt · đã chốt ${money(summary.realized)}`);
     const secs = {};
     for (const h of holdings) if (h.sector) secs[h.sector] = (secs[h.sector] || 0) + 1;
     const crowd = Object.entries(secs).filter(([, n]) => n > SLOT_RULES.perSector);
@@ -462,7 +487,8 @@ export async function buildReport(kind = 'close') {
   }
   const { getPortfolio } = await import('./portfolio.js');
   if (kind === 'weekly') {
-    const [{ getVerification }, pf, flows] = await Promise.all([import('./verify.js'), getPortfolio().catch(() => null), getSectorFlows(5).catch(() => null)]);
+    const [{ getVerification }, { getScorecard, formatScorecard }, pf, flows] = await Promise.all([import('./verify.js'), import('./scorecard.js'), getPortfolio().catch(() => null), getSectorFlows(5).catch(() => null)]);
+    const score = formatScorecard(await getScorecard().catch(() => null));
     const v = await getVerification().catch(() => null);
     const sectors = sectorMap(flows);
     const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
@@ -471,7 +497,7 @@ export async function buildReport(kind = 'close') {
       text: formatWeekly({
         date, summary: pf?.summary, capital: pf?.capital, slots: pf?.capital?.slots ?? slotsForCapital(accountCapital() != null ? accountCapital() * (1 - coreConfig().pct) : null),
         holdings: (pf?.holdings || []).filter((h) => h.symbol !== coreConfig().symbol).map((h) => ({ ...h, sector: sectors.get(h.symbol)?.name })),
-        hypotheses: v?.hypotheses || [], tuning: tuningLog().filter((x) => x.at >= weekAgo),
+        hypotheses: v?.hypotheses || [], tuning: tuningLog().filter((x) => x.at >= weekAgo), score,
       }),
       unverified: [],
     };

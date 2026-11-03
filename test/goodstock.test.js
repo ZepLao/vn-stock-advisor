@@ -96,3 +96,15 @@ test('comparePeriods + roeVerdict: cần IC tốt hơn VÀ danh mục lãi hơn 
   assert.equal(roeVerdict({ diff: { ...icGood.diff, second: -0.01 } }, c), 'reject', 'IC tụt ở nửa sau');
   assert.equal(roeVerdict(icGood, comparePeriods(pb, pa)), 'reject', 'danh mục kém hơn');
 });
+
+test('foreignReader: mua ròng 20 phiên / giá trị khớp 20 phiên, chỉ dùng dữ liệu đến phiên i', async () => {
+  const { foreignReader } = await import('../src/quality.js');
+  const bars = Array.from({ length: 25 }, (_, k) => ({ time: `2024-01-${String(k + 1).padStart(2, '0')}`, close: 10, volume: 1000 }));
+  const net = new Map(bars.map((b, k) => [b.time, k === 24 ? 1e9 : 100_000]));
+  const read = foreignReader(bars, net);
+  assert.equal(read(18), null); // chưa đủ 20 phiên
+  assert.equal(read(19), (20 * 100_000) / (20 * 10_000_000)); // 1%
+  assert.equal(read(23), 0.01); // phiên 24 bán/mua đột biến chưa được nhìn thấy
+  assert.equal(read(19), foreignReader(bars, new Map([...net].slice(0, 20)))(19));
+  assert.equal(foreignReader(bars, new Map([[bars[19].time, 1]]))(19), null); // thiếu quá nửa số phiên
+});

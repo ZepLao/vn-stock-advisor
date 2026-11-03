@@ -161,14 +161,14 @@ const REASON = { hold_end: 'hết 40 phiên, không còn là ứng viên', delis
 
 /**
  * Tin báo sau khi xử lý các phiên `dates` (hàm thuần): lệnh đã khớp, lệnh không khớp, lệnh cho phiên tới, tài sản.
- * null nếu không có gì đáng báo (không khớp lệnh nào và không phải phiên ra quyết định).
+ * Phiên không giao dịch vẫn gửi tin ngắn: tài sản, vì sao không giao dịch, còn mấy phiên tới lần ra quyết định tiếp.
  */
 export function formatAutoTradeMessage(st, dates, R = AUTO_RULES) {
   const last = dates.at(-1);
   const fills = st.orders.filter((o) => dates.includes(o.date));
   const unfilled = st.unfilled.filter((u) => dates.includes(u.date));
   const decided = st.lastGate?.date === last;
-  if (!fills.length && !unfilled.length && !decided) return null;
+  const quiet = !fills.length && !unfilled.length && !decided;
   const first = st.equity[0], eq = st.equity.at(-1);
   const pnl = eq.nav - st.funded;
   const idx = first?.index && eq?.index ? (eq.index / first.index - 1) * 100 : null;
@@ -177,6 +177,15 @@ export function formatAutoTradeMessage(st, dates, R = AUTO_RULES) {
     '<i>Tài khoản giấy theo vốn thực nạp ròng của bạn, không đặt lệnh thật</i>',
     `💰 Tài sản <b>${n0(eq.nav)} đ</b> · ${pnl >= 0 ? 'lãi' : 'lỗ'} <b>${pnl >= 0 ? '+' : '−'}${n0(Math.abs(pnl))} đ (${pct((pnl / st.funded) * 100)})</b> trên vốn ${n0(st.funded)} đ${idx != null ? ` · VN-Index cùng kỳ ${pct(idx)}` : ''}`,
   ];
+  if (quiet) {
+    const since = st.firstSession != null ? st.session - st.firstSession : 0;
+    const nextIn = R.step - (since % R.step);
+    const g = st.lastGate;
+    const holding = Object.keys(st.positions).length ? `đang giữ vị thế theo luật (giữ ~${R.hold} phiên)` : 'chưa có vị thế';
+    const gate = g?.gated ? `, tạm dừng mua mới vì thị trường yếu (${n0(g.breadth * 100)}% mã trên MA50 phiên ${dm(g.date)})` : '';
+    L.push('', `⏸ Hôm nay không giao dịch: ${holding}${gate}.`,
+      `Lần ra quyết định tiếp theo: sau phiên thứ ${nextIn} kể từ hôm nay (tool xét lại mỗi ${R.step} phiên, không mua bán liên tục).`);
+  }
   if (fills.length) {
     L.push('', `✅ <b>ĐÃ KHỚP</b> (giá mở cửa${dates.length > 1 ? `, ${dates.length} phiên` : ''})`);
     for (const o of fills) {

@@ -20,6 +20,7 @@ export const HOLD_RULES = {
   minutes: Number(process.env.HOLDWATCH_MINUTES) || 15,
   maxDaily: Number(process.env.HOLDWATCH_MAX_DAILY) || 3,
   drops: [{ at: -0.065, key: 'floor' }], // ≈ sát sàn HOSE (−7%)
+  nearPct: 0.05, // còn ≤ 5% là chạm ngưỡng cảnh báo −15%: báo trước để chuẩn bị (một lần/mã/ngày)
   rises: [],
 };
 
@@ -49,6 +50,9 @@ export function holdingEvents({ close, prevClose, stop, risk = null }, sent = []
   const fresh = (k) => !sent.includes(k);
   if (stop != null && close < stop && fresh('stop')) {
     out.push({ keys: ['stop'], tone: 'down', text: `⚠️ Dưới ngưỡng cảnh báo ${num(stop)} (−15% giá vốn) → <b>xem lại lý do nắm giữ</b>` });
+  }
+  if (stop != null && close >= stop && close <= stop * (1 + R.nearPct) && fresh('near')) {
+    out.push({ keys: ['near'], tone: 'warn', text: `⚠️ Còn ${num((close / stop - 1) * 100, 1)}% là chạm ngưỡng cảnh báo ${num(stop)} (−15% giá vốn) → chuẩn bị phương án, không bình quân giá xuống` });
   }
   if (risk && fresh('risk')) out.push({ keys: ['risk'], tone: 'down', text: `🚨 Rủi ro rơi tự do: ${esc(risk)} → bản tin chiều sẽ có lệnh bán nếu còn` });
   const chg = prevClose ? close / prevClose - 1 : null;

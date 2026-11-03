@@ -53,32 +53,7 @@ const POPULAR_STOCKS = [
 // 20-YEAR VETERAN TRADING ENGINE EXTENSIONS (CHƯƠNG 1, 7, 9, 12)
 // ==========================================================================
 
-// Cấu hình 3 Khung thời gian đầu tư (Chương 1 & 7)
-const HORIZON_CONFIG = {
-  swing: {
-    id: 'swing',
-    badge: 'Ngắn hạn: 5–20 phiên',
-    question: 'Có điểm mua rủi ro thấp không?',
-    weightsText: 'Kỹ thuật 45% · Dòng tiền 25% · Ngành 15% · Cơ bản 10% · Tâm lý 5%',
-    weights: { ta: 0.45, flow: 0.25, sector: 0.15, fa: 0.10, sent: 0.05 }
-  },
-  mid: {
-    id: 'mid',
-    badge: 'Trung hạn: 1–6 tháng',
-    question: 'Cổ phiếu có vượt trội VN-Index không?',
-    weightsText: 'Cơ bản 35% · Kỹ thuật 25% · Dòng tiền 20% · Ngành 15% · Tâm lý 5%',
-    weights: { fa: 0.35, ta: 0.25, flow: 0.20, sector: 0.15, sent: 0.05 }
-  },
-  long: {
-    id: 'long',
-    badge: 'Dài hạn: 1–3 năm',
-    question: 'Doanh nghiệp có xứng đáng sở hữu không?',
-    weightsText: 'Cơ bản 55% · Ngành 15% · Kỹ thuật 10% · Dòng tiền 10% · Tâm lý 10%',
-    weights: { fa: 0.55, sector: 0.15, ta: 0.10, flow: 0.10, sent: 0.10 }
-  }
-};
-
-// 20 Nguyên tắc thực chiến bất biến của chuyên gia 20 năm (Chương 12)
+// 20 nguyên tắc đầu tư & kỷ luật rủi ro
 const RULES_20 = [
   {
     group: '1. Tâm lý, Kỷ luật & Bảo toàn vốn',
@@ -122,57 +97,6 @@ const RULES_20 = [
   }
 ];
 
-function computeHorizonScore(a, horizon) {
-  const cfg = HORIZON_CONFIG[horizon] || HORIZON_CONFIG.swing;
-  const w = cfg.weights;
-  const ta = a.ranking?.score ?? Math.min(100, Math.max(0, ((a.scores?.technical ?? 0) / 2) + 50));
-  const fa = Math.min(100, Math.max(0, ((a.scores?.fundamental ?? 0) / 2) + 50));
-  const flow = a.flow?.net5d != null ? (a.flow.net5d > 0 ? 75 : 35) : 50;
-  const sector = 55;
-  const sent = Math.min(100, Math.max(0, ((a.scores?.news ?? 0) / 2) + 50));
-  return Math.round(ta * w.ta + fa * w.fa + flow * w.flow + sector * w.sector + sent * w.sent);
-}
-
-function renderHorizon(a) {
-  const horizonCard = $('horizon-card');
-  if (!horizonCard) return;
-  horizonCard.hidden = !!a.isIndex;
-  const h = state.horizon || 'swing';
-  const cfg = HORIZON_CONFIG[h];
-  
-  const elBadge = $('horizon-badge');
-  if (elBadge) elBadge.textContent = cfg.badge;
-  const elQ = $('hz-question-text');
-  if (elQ) elQ.textContent = cfg.question;
-  const elW = $('hz-weights-text');
-  if (elW) elW.innerHTML = '<span>Trọng số: <b>' + cfg.weightsText + '</b></span>';
-  
-  document.querySelectorAll('#horizon-selector .btn-horizon').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.horizon === h);
-  });
-
-  if (!a.isIndex) {
-    const hScore = computeHorizonScore(a, h);
-    const hzLabel = h === 'swing' ? 'Swing' : h === 'mid' ? 'Trung' : 'Dài';
-    const elTotal = $('r-total');
-    if (elTotal) {
-      elTotal.innerHTML = hScore + '/100 <span class="muted" style="font-size:10px; font-weight:normal">(' + hzLabel + ')</span>';
-    }
-  }
-}
-
-function setupHorizonEvents() {
-  $('horizon-selector')?.addEventListener('click', (e) => {
-    const btn = e.target.closest('.btn-horizon');
-    if (!btn || !state.current) return;
-    const h = btn.dataset.horizon;
-    if (h && state.horizon !== h) {
-      state.horizon = h;
-      renderHorizon(state.current);
-    }
-  });
-}
-
 function setupRulesModal() {
   const modal = $('modal-20-rules');
   const openBtn = $('btn-20-rules');
@@ -203,82 +127,6 @@ function setupRulesModal() {
   modal?.addEventListener('click', (e) => {
     if (e.target === modal) modal.hidden = true;
   });
-}
-
-function renderAccuracyDashboard(a) {
-  const mp = a.mathProb ?? a.brief?.mathProb;
-  const bt = a.backtest;
-  
-  const hitRate = mp?.pWin != null ? (mp.pWin * 100).toFixed(1) : (bt?.winRate != null ? (bt.winRate * 100).toFixed(1) : '58.4');
-  const hitRatePass = parseFloat(hitRate) >= 55.0;
-
-  const payoff = mp?.avgWinLossRatio != null ? mp.avgWinLossRatio.toFixed(1) : (bt?.payoff != null ? bt.payoff.toFixed(1) : '2.4');
-  const payoffPass = parseFloat(payoff) >= 2.0;
-
-  const pf = bt?.profitFactor != null ? bt.profitFactor.toFixed(2) : '1.82';
-  const pfPass = parseFloat(pf) >= 1.6;
-
-  const evVal = mp?.expectedValuePct ?? 4.2;
-  const evPass = evVal > 0;
-
-  const mddVal = bt?.maxDrawdown != null ? Math.abs(bt.maxDrawdown * 100).toFixed(1) : '14.8';
-  const mddPass = parseFloat(mddVal) <= 20.0;
-
-  const sharpe = bt?.sharpe != null ? bt.sharpe.toFixed(2) : '1.38';
-  const sharpePass = parseFloat(sharpe) >= 1.0;
-
-  const calibError = '±3.2%';
-  const calibPass = true;
-
-  const alphaVal = bt?.excessReturn != null ? (bt.excessReturn * 100).toFixed(1) : '+6.8';
-  const alphaPass = parseFloat(alphaVal) > 0;
-
-  const rows = [
-    { name: '1. Tỷ lệ thắng (Hit Rate)', meaning: '% tín hiệu mua sinh lời thực tế', req: '≥ 55%', actual: hitRate + '%', pass: hitRatePass },
-    { name: '2. Tỷ lệ Lãi / Lỗ (Payoff)', meaning: 'Lãi TB mỗi lệnh / Lỗ TB mỗi lệnh', req: '≥ 2.0x', actual: payoff + 'x', pass: payoffPass },
-    { name: '3. Profit Factor (PF)', meaning: 'Tổng tiền lãi / Tổng tiền lỗ', req: '≥ 1.60', actual: pf, pass: pfPass },
-    { name: '4. Kỳ vọng toán học (EV)', meaning: 'Lợi nhuận kỳ vọng sau thuế phí', req: '> 0%', actual: (evVal >= 0 ? '+' : '') + evVal + '%', pass: evPass },
-    { name: '5. Sụt giảm đỉnh (MDD)', meaning: 'Mức sụt giảm NAV từ đỉnh lớn nhất', req: '≤ 20%', actual: '-' + mddVal + '%', pass: mddPass },
-    { name: '6. Hệ số Sharpe', meaning: 'Lợi nhuận điều chỉnh theo rủi ro', req: '≥ 1.0', actual: sharpe, pass: sharpePass },
-    { name: '7. Độ hiệu chỉnh xác suất', meaning: 'Sai lệch P(Dự báo) vs P(Thực tế)', req: '≤ 5%', actual: calibError, pass: calibPass },
-    { name: '8. Alpha so với VN-Index', meaning: 'Lợi nhuận vượt trội chỉ số chung', req: '> 0%', actual: (String(alphaVal).startsWith('+') ? '' : '+') + alphaVal + '%', pass: alphaPass },
-  ];
-
-  return `
-    <div class="card accuracy-card" style="margin-bottom:14px; padding:16px">
-      <div class="card-head" style="margin-bottom:8px">
-        <div>
-          <h3 style="font-size:14px; font-weight:800; color:var(--text)">🏛️ BẢNG ĐO ĐỘ CHUẨN THỰC CHIẾN (ACCURACY DASHBOARD)</h3>
-          <div class="muted small">Tiêu chuẩn kiểm định định lượng 8 chỉ số của Quỹ đầu tư (Chương 1)</div>
-        </div>
-        <span class="badge-subtle">Kiểm định ngoài mẫu</span>
-      </div>
-      <div class="accuracy-table-wrap">
-        <table class="accuracy-table">
-          <thead>
-            <tr>
-              <th>Chỉ số</th>
-              <th>Ý nghĩa</th>
-              <th>Ngưỡng Quỹ</th>
-              <th>Kết quả</th>
-              <th>Đánh giá</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map(r => `
-              <tr>
-                <td><b>${r.name}</b></td>
-                <td class="muted">${r.meaning}</td>
-                <td><code>${r.req}</code></td>
-                <td><strong class="${r.pass ? 'up' : 'down'}">${r.actual}</strong></td>
-                <td><span class="accuracy-status-badge ${r.pass ? 'pass' : 'warn'}">${r.pass ? '✅ ĐẠT CHUẨN' : '⚠️ CẦN TỐI ƯU'}</span></td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
 }
 
 function renderCapitalOverview(p) {
@@ -692,6 +540,9 @@ async function loadWatchlist() {
   if ($('wl-count-tab')) $('wl-count-tab').textContent = state.watchlist.length;
   if ($('mb-wl-count')) $('mb-wl-count').textContent = state.watchlist.length;
   renderWatchlist();
+  // Lần đầu mở trang mà chưa theo dõi mã nào: hiện sẵn tab Thị trường thay vì một danh sách trống
+  if (!state.sideChosen && !state.watchlist.length && window.innerWidth >= 1024) $('side-tab-movers')?.click();
+  state.sideChosen = true;
 }
 
 function renderWatchlist() {
@@ -957,6 +808,7 @@ async function analyze(symbol) {
   $('sector-btn')?.classList.remove('on');
   $('autoview').hidden = true;
   $('auto-btn')?.classList.remove('on');
+  $('marketview').hidden = true;
   $('loading').hidden = false;
   $('loading-msg').textContent = `Đang phân tích ${symbol}…`;
   history.replaceState(null, '', `#${symbol}`);
@@ -975,51 +827,75 @@ async function analyze(symbol) {
   }
 }
 
+$('r-warnings')?.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-warn-toggle]');
+  if (!b) return;
+  const card = b.closest('.warn-card');
+  card.classList.toggle('open');
+  b.textContent = card.classList.contains('open') ? 'Thu gọn' : `Xem cả ${card.querySelectorAll('.warn-list li').length}`;
+});
+
 $('error-retry')?.addEventListener('click', () => {
   if (state.current?.symbol) analyze(state.current.symbol);
 });
 
-// ---------- Sticky Tabs Switching for Logical Testing ----------
+// ---------- Thanh mục của trang phân tích: mọi mục luôn hiện, bấm để cuộn tới ----------
 function initTabs() {
   const nav = $('report-nav');
   if (!nav) return;
+  const mark = (id) => nav.querySelectorAll('.nav-tab').forEach((t) => {
+    const on = t.dataset.target === id;
+    t.classList.toggle('on', on);
+    if (on && !t.classList.contains('was-on')) nav.scrollTo({ left: t.offsetLeft - (nav.clientWidth - t.offsetWidth) / 2, behavior: 'smooth' });
+    t.classList.toggle('was-on', on);
+  });
+  let lock = 0;
   nav.addEventListener('click', (e) => {
     const tab = e.target.closest('.nav-tab');
     if (!tab) return;
-    const target = tab.dataset.target;
-
-    document.querySelectorAll('.nav-tab').forEach((t) => t.classList.remove('on'));
-    tab.classList.add('on');
-
-    const panel = $('deep-dive-panel');
-    if (panel) panel.open = true;
-
-    const reportEl = $('report');
-    if (target === 'all') {
-      reportEl.classList.add('mode-all');
-      document.querySelectorAll('.report-section').forEach((s) => s.classList.add('active'));
-      showToast('Đang hiển thị toàn bộ các phần (Chế độ cuộn)', 'info', 2000);
-      return;
-    }
-
-    reportEl.classList.remove('mode-all');
-    document.querySelectorAll('.report-section').forEach((s) => {
-      s.classList.toggle('active', s.id === target);
-    });
-
-    state.activeTab = target;
-    if (target === 'sec-chart' && state.chart && state.current) {
-      setTimeout(() => renderChart(state.current), 50);
-    }
-    if (target === 'sec-foreign' && state.current) {
-      setTimeout(() => renderForeignChart(state.current), 50);
-    }
-    if (target === 'sec-backtest' && BT.result) {
-      setTimeout(() => renderBtChart(BT.result), 50);
-    }
+    const sec = $(tab.dataset.target);
+    if (!sec) return;
+    mark(tab.dataset.target);
+    lock = Date.now() + 800; // trong lúc cuộn mượt, không để theo dõi cuộn đổi mục đang chọn
+    sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
+  // Mục đang xem: mục cuối cùng có đầu mục đã cuộn qua ngay dưới thanh mục
+  const secs = [...document.querySelectorAll('.report-section')];
+  let queued = false;
+  const spy = () => {
+    queued = false;
+    if (Date.now() < lock || $('report').hidden) return;
+    const line = nav.getBoundingClientRect().bottom + 90;
+    let cur = secs[0];
+    for (const sec of secs) if (sec.offsetParent !== null && sec.getBoundingClientRect().top <= line) cur = sec;
+    // Đã cuộn hết trang: mục cuối không thể lên tới thanh mục, coi mục thấp nhất đang hiện là mục đang xem
+    if (innerHeight + scrollY >= document.documentElement.scrollHeight - 4) cur = secs.filter((x) => x.offsetParent !== null && x.getBoundingClientRect().top < innerHeight).at(-1) || cur;
+    if (cur) mark(cur.id);
+  };
+  window.addEventListener('scroll', () => { if (!queued) { queued = true; requestAnimationFrame(spy); } }, { passive: true });
 }
 initTabs();
+
+// ---------- Chế độ trang: danh sách mã bên trái chỉ có ở trang phân tích mã, và ẩn/hiện được ----------
+const PAGE_OF = { marketview: 'market', report: 'stock', empty: 'stock', loading: 'stock', error: 'stock', picks: 'picks', sectorview: 'sector', rankview: 'rank', portfolio: 'portfolio', autoview: 'auto' };
+function syncPage() {
+  const id = Object.keys(PAGE_OF).find((k) => $(k) && !$(k).hidden);
+  document.body.dataset.page = PAGE_OF[id] || 'stock';
+  $('mk-btn')?.classList.toggle('on', id === 'marketview');
+}
+const pageObserver = new MutationObserver(syncPage);
+Object.keys(PAGE_OF).forEach((k) => $(k) && pageObserver.observe($(k), { attributes: true, attributeFilter: ['hidden'] }));
+syncPage();
+
+function setSide(on) {
+  document.body.dataset.side = on ? 'on' : 'off';
+  $('side-toggle')?.setAttribute('aria-pressed', String(on));
+  try { localStorage.setItem('vnstock_side', on ? 'on' : 'off'); } catch { /* bỏ qua */ }
+  // Biểu đồ đổi bề rộng: canh lại khung nhìn
+  requestAnimationFrame(() => { if (state.chart) setRange(state.chartDays); });
+}
+setSide((() => { try { return localStorage.getItem('vnstock_side') !== 'off'; } catch { return true; } })());
+$('side-toggle')?.addEventListener('click', () => setSide(document.body.dataset.side !== 'on'));
 
 // ---------- Hiển thị kết quả chi tiết ----------
 function render(a) {
@@ -1032,7 +908,12 @@ function render(a) {
   changeBadge.className = `change-badge ${dirClass(a.price.change)}`;
   $('r-change').textContent = `${signed(a.price.change)} (${signed(a.price.changePct)}%)`;
 
-  $('r-date').textContent = `Phiên ${a.price.date} · Khối lượng ${fmt(a.price.volume, 0)} CP · ${a.isIndex ? 'Điểm' : 'Nghìn VNĐ'} · Nguồn giá ${a.price.source}`;
+  // Độ mới dữ liệu: giá trong phiên hay đã đóng cửa, BCTC quý nào
+  const er = a.company?.earnings;
+  $('r-date').textContent = [
+    `Phiên ${a.price.date.split('-').reverse().join('/')}`, a.price.partial ? 'đang giao dịch, giá tạm tính' : 'đã đóng cửa',
+    er?.latest && `BCTC ${er.latest}`,
+  ].filter(Boolean).join(' · ');
 
   const rec = $('r-rec');
   rec.className = `recommendation-badge ${a.recommendation.code}`;
@@ -1044,57 +925,36 @@ function render(a) {
   $('r-conf').textContent = a.ranking ? `${a.ranking.position}/${a.ranking.universe}` : `${a.recommendation.confidence}%`;
   $('r-desc').textContent = a.recommendation.desc;
 
-  // Xác suất thắng & Kỳ vọng toán học
-  const mp = a.mathProb;
-  const elMathWin = $('r-math-win');
-  const elMathEv = $('r-math-ev');
-  if (mp && mp.pWin != null) {
-    if (elMathWin) elMathWin.textContent = `${(mp.pWin * 100).toFixed(1)}%`;
-    if (elMathEv) {
-      const evVal = mp.expectedValuePct ?? (mp.expectedValue != null ? mp.expectedValue * 100 : null);
-      if (evVal != null) {
-        elMathEv.textContent = `${evVal > 0 ? '+' : ''}${evVal.toFixed(1)}%`;
-        elMathEv.style.color = evVal > 0 ? 'var(--up-text, #34d399)' : 'var(--down-text, #f87171)';
-      } else {
-        elMathEv.textContent = '--%';
-      }
-    }
-  } else if (a.monteCarlo && a.monteCarlo.probUp != null) {
-    if (elMathWin) elMathWin.textContent = `${(a.monteCarlo.probUp * 100).toFixed(1)}%`;
-    if (elMathEv) {
-      const evVal = a.monteCarlo.finalRetMedian;
-      if (evVal != null) {
-        elMathEv.textContent = `${evVal > 0 ? '+' : ''}${evVal.toFixed(1)}%`;
-        elMathEv.style.color = evVal > 0 ? 'var(--up-text, #34d399)' : 'var(--down-text, #f87171)';
-      } else {
-        elMathEv.textContent = '--%';
-      }
-    }
-  } else {
-    if (elMathWin) elMathWin.textContent = '--%';
-    if (elMathEv) elMathEv.textContent = '--%';
-  }
+  // Thống kê đã đo của nhóm điểm này (4 năm, rổ theo thời điểm), thay cho xác suất mô phỏng
+  const ex = a.expectation?.h20;
+  $('r-exp-win').textContent = ex ? `${Math.round(ex.pBeat * 100)}%` : '–';
+  const elEx = $('r-exp-ex');
+  elEx.textContent = ex ? `${signed(ex.meanExcess * 100, 1)}%` : '–';
+  elEx.className = ex ? dirClass(ex.meanExcess) : '';
+  elEx.title = ex ? `80% số lần nằm trong ${signed(ex.p10 * 100, 1)}% đến ${signed(ex.p90 * 100, 1)}%${ex.significant ? '' : ' · chưa có ý nghĩa thống kê'}` : '';
 
   // Cảnh báo rủi ro
-  $('r-warnings').innerHTML = a.warnings.map((w) => `<div class="warning">${esc(w)}</div>`).join('');
+  const W = a.warnings || [];
+  $('r-warnings').innerHTML = W.length ? `<section class="card warn-card">
+      <div class="warn-head"><b>⚠️ ${W.length} cảnh báo cho ${esc(a.symbol)}</b>
+        ${W.length > 3 ? `<button type="button" class="btn btn-ghost btn-xs" data-warn-toggle>Xem cả ${W.length}</button>` : ''}</div>
+      <ul class="warn-list">${W.map((w, i) => `<li${i >= 3 ? ' class="more"' : ''}>${esc(w.replace(/^\[([^\]]+)\]\s*/, ''))}${/^\[/.test(w) ? ` <span class="warn-tag">${esc(w.match(/^\[([^\]]+)\]/)[1])}</span>` : ''}</li>`).join('')}</ul>
+    </section>` : '';
 
   // 1. Thẻ Quyết định Mua / Bán (điểm hệ thống; Gemini ghép vào khi có kết quả)
   state.aiError = null;
   renderDecisionCard(a);
   applyAiToDecision(a, null);
+  renderMarketGate(a);
+  loadHoldBox(a);
 
   // 2. Điểm số & Biểu đồ nến
-  renderScores(a);
   renderChart(a);
 
   // 3. Khối ngoại mua/bán 20 phiên
   renderForeignChart(a);
 
-  // 4. Tổng hợp đánh giá nhanh
-  renderOverview(a);
-
   // 5. Tín hiệu kỹ thuật & Kế hoạch tham khảo
-  renderSignals(a);
   renderPlan(a);
   renderIndicators(a);
 
@@ -1103,12 +963,8 @@ function render(a) {
   renderBusiness(a);
   renderNews(a);
   loadAi(a);
-  resetBacktest(a);
   renderRankCard(a);
-  renderHorizon(a);
   renderBrief(a);
-  const simBox = $('verify-sim-box');
-  if (simBox) simBox.innerHTML = renderAccuracyDashboard(a);
   renderFlow(a);
   loadCommittee(a);
   updateAlertPresets(a.price.close);
@@ -1121,122 +977,9 @@ function render(a) {
   form.priceAbove.value = w?.priceAbove ?? '';
   form.priceBelow.value = w?.priceBelow ?? '';
   form.note.value = w?.note ?? '';
+  setFold('sec-alerts', w?.priceAbove || w?.priceBelow ? [w.priceAbove && `báo khi ≥ ${fmt(w.priceAbove)}`, w.priceBelow && `báo khi ≤ ${fmt(w.priceBelow)}`].filter(Boolean).join(' · ') : 'Chưa đặt');
+  syncFolds();
   updateWatchButton();
-}
-
-// ---------- THẺ QUYẾT ĐỊNH MUA / BÁN (DECISION CARD) ----------
-function renderDecisionCard(a) {
-  const card = $('decision-card');
-  if (!card) return;
-
-  // Kết luận, hành động và mức giá đã nằm ở thẻ Tóm tắt phía trên; thẻ này chỉ còn căn cứ chi tiết
-  card.className = 'card decision-card';
-
-  // Dòng tiền & Khối ngoại mua/bán
-  const mf = a.marketFlow;
-  const f = a.foreign;
-  let flowHtml = '';
-  if (mf) {
-    flowHtml += `
-      <div class="dc-flow-row"><span class="k">Độ rộng toàn sàn (${mf.floor})</span><span class="v"><b class="up">${mf.advancers} tăng</b> / <b class="down">${mf.decliners} giảm</b></span></div>
-      <div class="dc-flow-row"><span class="k">Khối ngoại toàn sàn</span><span class="v ${dirClass(mf.foreign?.netVal)}">${signed((mf.foreign?.netVal || 0) / 1e9, 0)} tỷ</span></div>
-    `;
-  }
-  if (f) {
-    flowHtml += `
-      <div class="dc-flow-row"><span class="k">Khối ngoại mã này (phiên)</span><span class="v ${dirClass(f.net1)}">${signed((f.net1 || 0) / 1e9, 1)} tỷ</span></div>
-      <div class="dc-flow-row"><span class="k">Khối ngoại 5 phiên gần nhất</span><span class="v ${dirClass(f.net5)}">${signed((f.net5 || 0) / 1e9, 1)} tỷ (${f.buyDays5}/5 mua)</span></div>
-    `;
-  }
-  $('dc-flow').innerHTML = flowHtml || '<span class="muted small">Chưa có số liệu dòng tiền</span>';
-
-  // Điều kiện cần theo dõi
-  let watchTxt = 'Theo dõi phản ứng của giá tại các ngưỡng MA20 và biến động dòng tiền khối ngoại.';
-  if (a.technical.indicators.rsi14 < 30) watchTxt = 'RSI đang trong vùng quá bán: Theo dõi khả năng xuất hiện nhịp hồi kỹ thuật ngắn hạn.';
-  if (a.technical.indicators.rsi14 > 70) watchTxt = 'RSI đang trong vùng quá mua: Thận trọng áp lực chốt lời gia tăng.';
-  $('dc-watch').innerHTML = `<b>Lưu ý giao dịch:</b> ${watchTxt}`;
-
-  // Top 3 Luận điểm mua (Điểm cộng) & Top 3 Rủi ro (Điểm trừ)
-  const allSigs = [...a.technical.signals, ...a.fundamental.signals, ...a.news.signals];
-  const pros = allSigs.filter((s) => s.points > 0).sort((a, b) => b.points - a.points).slice(0, 3);
-  const cons = allSigs.filter((s) => s.points < 0).sort((a, b) => a.points - b.points).slice(0, 3);
-
-  $('dc-pros').innerHTML = pros.length
-    ? pros.map((p) => `<li><b>+${p.points}đ:</b> ${esc(p.text)}</li>`).join('')
-    : '<li class="muted">Chưa ghi nhận tín hiệu tích cực nổi trội.</li>';
-
-  $('dc-cons').innerHTML = cons.length
-    ? cons.map((c) => `<li><b>${c.points}đ:</b> ${esc(c.text)}</li>`).join('')
-    : '<li class="muted">Chưa ghi nhận rủi ro đáng kể.</li>';
-}
-
-// ---------- KHỐI NGOẠI MUA / BÁN 20 PHIÊN (SVG CHART) ----------
-function renderForeignChart(a) {
-  const container = $('foreign-chart');
-  const statsEl = $('foreign-stats');
-  const summaryEl = $('foreign-summary');
-  if (!container || !a.foreign?.history) {
-    $('foreign-card').hidden = true;
-    return;
-  }
-  $('foreign-card').hidden = false;
-  const f = a.foreign;
-  const hist = [...f.history].reverse(); // Từ ngày cũ đến mới nhất
-  const maxNet = Math.max(...hist.map((h) => Math.abs(h.netVal || 0)), 1e8);
-
-  const w = 700;
-  const h = 160;
-  const padBottom = 24;
-  const padTop = 10;
-  const barW = Math.max(4, Math.floor(w / hist.length) - 6);
-  const midY = (h - padBottom - padTop) / 2 + padTop;
-  const scale = ((h - padBottom - padTop) / 2) / maxNet;
-
-  const svgBars = hist.map((d, i) => {
-    const x = i * (w / hist.length) + 4;
-    const val = d.netVal || 0;
-    const barH = Math.max(3, Math.abs(val) * scale);
-    const y = val >= 0 ? midY - barH : midY;
-    const cls = val >= 0 ? 'pos' : 'neg';
-    const dateStr = d.date ? d.date.slice(5) : '';
-    const valBillion = (val / 1e9).toFixed(1);
-    return `
-      <rect class="bar ${cls}" x="${x}" y="${y}" width="${barW}" height="${barH}" rx="2">
-        <title>${d.date}: ${val >= 0 ? '+' : ''}${valBillion} tỷ (Mua: ${(d.buyVal / 1e9).toFixed(1)} tỷ, Bán: ${(d.sellVal / 1e9).toFixed(1)} tỷ)</title>
-      </rect>
-      ${i % 3 === 0 ? `<text x="${x + barW / 2}" y="${h - 6}" text-anchor="middle">${dateStr}</text>` : ''}
-    `;
-  }).join('');
-
-  container.innerHTML = `
-    <svg viewBox="0 0 ${w} ${h}">
-      <line class="zero" x1="0" y1="${midY}" x2="${w}" y2="${midY}"></line>
-      ${svgBars}
-    </svg>
-  `;
-
-  summaryEl.textContent = `${f.buyDays5 ?? '–'}/5 phiên mua ròng gần nhất`;
-  statsEl.innerHTML = `
-    <span>Phiên gần nhất: <b class="${dirClass(f.net1)}">${signed((f.net1 || 0) / 1e9, 1)} tỷ</b></span>
-    <span>Mua ròng 5 phiên: <b class="${dirClass(f.net5)}">${signed((f.net5 || 0) / 1e9, 1)} tỷ</b></span>
-    <span>Mua ròng 20 phiên: <b class="${dirClass(f.net20)}">${signed((f.net20 || 0) / 1e9, 1)} tỷ</b></span>
-    <span>Tỷ lệ so với GTGD: <b>${f.ratio20 != null ? `${signed(f.ratio20, 1)}%` : '–'}</b></span>
-  `;
-}
-
-// ---------- TỔNG HỢP ĐÁNH GIÁ NHANH (OVERVIEW) ----------
-function renderOverview(a) {
-  const el = $('overview-grid');
-  if (!el || !a.overview) return;
-  el.innerHTML = a.overview.map((item) => `
-    <div class="ov-item ${item.tone}">
-      <div class="ov-head">
-        <span class="ov-label">${esc(item.label)}</span>
-      </div>
-      <div class="ov-verdict ${item.tone}">${esc(item.verdict)}</div>
-      <div class="ov-detail">${esc(item.detail)}</div>
-    </div>
-  `).join('');
 }
 
 function updateWatchButton() {
@@ -1318,29 +1061,142 @@ $('test-alert-hero')?.addEventListener('click', async () => {
   }
 });
 
-// Điểm số Diverging Bar
-function renderScores(a) {
-  const tiles = [
-    ['technical', 'Kỹ thuật'],
-    ['fundamental', 'Cơ bản'],
-    ['news', 'Tin tức & Tâm lý'],
-  ];
-  $('r-scores').innerHTML = tiles.map(([k, label]) => {
-    const v = a.scores[k];
-    const w = Math.round(a.weights[k] * 100);
-    const width = v == null ? 0 : Math.min(50, Math.abs(v) / 2);
+// ---------- THẺ QUYẾT ĐỊNH MUA / BÁN (DECISION CARD) ----------
+function renderDecisionCard(a) {
+  const card = $('decision-card');
+  if (!card) return;
+
+  // Kết luận, hành động và mức giá đã nằm ở thẻ Tóm tắt phía trên; thẻ này chỉ còn căn cứ chi tiết
+  card.className = 'card decision-card';
+
+  // Dòng tiền & Khối ngoại mua/bán
+  const mf = a.marketFlow;
+  const f = a.foreign;
+  let flowHtml = '';
+  if (mf) {
+    flowHtml += `
+      <div class="dc-flow-row"><span class="k">Độ rộng toàn sàn (${mf.floor})</span><span class="v"><b class="up">${mf.advancers} tăng</b> / <b class="down">${mf.decliners} giảm</b></span></div>
+      <div class="dc-flow-row"><span class="k">Khối ngoại toàn sàn</span><span class="v ${dirClass(mf.foreign?.netVal)}">${signed((mf.foreign?.netVal || 0) / 1e9, 0)} tỷ</span></div>
+    `;
+  }
+  if (f) {
+    flowHtml += `
+      <div class="dc-flow-row"><span class="k">Khối ngoại mã này (phiên)</span><span class="v ${dirClass(f.net1)}">${signed((f.net1 || 0) / 1e9, 1)} tỷ</span></div>
+      <div class="dc-flow-row"><span class="k">Khối ngoại 5 phiên gần nhất</span><span class="v ${dirClass(f.net5)}">${signed((f.net5 || 0) / 1e9, 1)} tỷ (${f.buyDays5}/5 mua)</span></div>
+    `;
+  }
+  $('dc-flow').innerHTML = flowHtml || '<span class="muted small">Chưa có số liệu dòng tiền</span>';
+
+  // Điều kiện mua: luật độ rộng thị trường (đã kiểm định, dùng cho tool tự đầu tư)
+  const br = a.marketRegime?.breadth?.pctAboveMa50;
+  $('dc-watch').innerHTML = br == null
+    ? '<b>Độ rộng thị trường:</b> chưa có số liệu.'
+    : `<b>Độ rộng thị trường:</b> ${Math.round(br)}% mã trên MA50 → ${br < 50 ? '<span class="down">dưới 50%: không mua mới, mã đang giữ vẫn theo luật giữ / bán</span>' : '<span class="up">từ 50% trở lên: được mua mới theo xếp hạng</span>'}`;
+
+  // Điểm mạnh / rủi ro: chỉ những yếu tố đã kiểm định trên dữ liệu 4–8 năm
+  const r = a.ranking;
+  const pros = [], cons = [];
+  if (r) {
+    for (const [k, label] of RANK_PART_LABEL) {
+      const v = r.parts?.[k];
+      if (v == null) continue;
+      if (v >= 70) pros.push(`${label}: phân vị ${Math.round(v)}/100`);
+      else if (v <= 30) cons.push(`${label}: phân vị ${Math.round(v)}/100`);
+    }
+    if (r.trendPick) pros.push('Xu hướng chuẩn: gần đỉnh 52 tuần và biến động êm');
+    if (r.aboveMa200 === true) pros.push('Giá trên MA200 (xu hướng dài hạn tốt)');
+    if (r.aboveMa200 === false) cons.push('Giá dưới MA200: nhóm này kém rổ trong kiểm định');
+    if (r.avoid) cons.unshift('⛔ Thuộc 10% điểm thấp nhất rổ: kém rổ ≈ 1,3% mỗi 20 phiên');
+  }
+  if (a.stockRisk?.isRisky) cons.push(`Rủi ro rơi tự do: ${a.stockRisk.reasons.join(', ')}`);
+  for (const w of a.buyWarnings || []) cons.push(`${w.name}: ${w.text}`);
+  if (br != null && br < 50) cons.push(`Thị trường yếu: chỉ ${Math.round(br)}% mã trên MA50`);
+
+  $('dc-pros').innerHTML = pros.length ? pros.map((p) => `<li>${esc(p)}</li>`).join('') : '<li class="muted">Chưa có yếu tố mạnh nổi trội.</li>';
+  $('dc-cons').innerHTML = cons.length ? cons.map((c) => `<li>${esc(c)}</li>`).join('') : '<li class="muted">Chưa ghi nhận rủi ro đã kiểm định.</li>';
+  setFold('sec-decision', `${pros.length} điểm mạnh · ${cons.length} rủi ro`, cons.length > pros.length ? 'down' : pros.length > cons.length ? 'up' : '');
+}
+
+const RANK_PART_LABEL = [['mom', 'Động lượng 12 tháng'], ['high', 'Gần đỉnh 52 tuần'], ['atr', 'Biến động thấp'], ['adx', 'Xu hướng rõ (ADX)']];
+
+// Banner đầu trang: luật độ rộng thị trường áp cho mọi lệnh mua mới
+function renderMarketGate(a) {
+  const el = $('r-market-gate');
+  const br = a.marketRegime?.breadth?.pctAboveMa50;
+  if (a.isIndex || br == null) { el.innerHTML = ''; return; }
+  el.innerHTML = br < 50
+    ? `<div class="warning"><span>⏸ Thị trường yếu: chỉ <b>${Math.round(br)}%</b> mã trên MA50 (dưới 50%). Luật đã kiểm định: <b>không mua mới</b>, kể cả mã điểm cao.</span></div>`
+    : '';
+}
+
+// Nếu đang nắm mã này: BÁN / XEM LẠI / GIỮ / MUA THÊM và rủi ro, cùng cách tính với trang Danh mục và Telegram
+async function loadHoldBox(a) {
+  const el = $('qc-hold');
+  el.hidden = true;
+  if (a.isIndex || !a.holding) return;
+  try {
+    const d = await api('/api/portfolio/advice');
+    const x = d.items.find((i) => i.symbol === a.symbol);
+    if (!x || state.current?.symbol !== a.symbol) return;
+    el.innerHTML = `<span class="st-badge ${ADVICE_TONE[x.action] || ''}">${esc(x.action)}</span>
+      <span><b>Bạn đang nắm ${fmt(x.qty, 0)} cp</b>, ${x.pnlPct >= 0 ? 'lãi' : 'lỗ'} <b class="${dirClass(x.pnlPct)}">${signed(x.pnlPct * 100)}%</b>${x.held != null ? ` · đã giữ ${x.held}/${x.N} phiên` : ''}. ${esc(short(x.why.split(';')[0], 80))}</span>`;
+    el.hidden = false;
+  } catch { /* không có thì thôi */ }
+}
+
+// ---------- KHỐI NGOẠI MUA / BÁN 20 PHIÊN (SVG CHART) ----------
+function renderForeignChart(a) {
+  const container = $('foreign-chart');
+  const statsEl = $('foreign-stats');
+  const summaryEl = $('foreign-summary');
+  if (!container || !a.foreign?.history) {
+    $('foreign-card').hidden = true;
+    return;
+  }
+  $('foreign-card').hidden = false;
+  const f = a.foreign;
+  const hist = [...f.history].reverse(); // Từ ngày cũ đến mới nhất
+  const maxNet = Math.max(...hist.map((h) => Math.abs(h.netVal || 0)), 1e8);
+
+  const w = 700;
+  const h = 160;
+  const padBottom = 24;
+  const padTop = 10;
+  const barW = Math.max(4, Math.floor(w / hist.length) - 6);
+  const midY = (h - padBottom - padTop) / 2 + padTop;
+  const scale = ((h - padBottom - padTop) / 2) / maxNet;
+
+  const svgBars = hist.map((d, i) => {
+    const x = i * (w / hist.length) + 4;
+    const val = d.netVal || 0;
+    const barH = Math.max(3, Math.abs(val) * scale);
+    const y = val >= 0 ? midY - barH : midY;
+    const cls = val >= 0 ? 'pos' : 'neg';
+    const dateStr = d.date ? d.date.slice(5) : '';
+    const valBillion = (val / 1e9).toFixed(1);
     return `
-      <div class="score-tile">
-        <div class="lbl"><span>${label}</span><span>${a.ranking ? 'Điểm cũ · tham khảo' : `Trọng số ${w}%`}</span></div>
-        <div class="val ${v == null ? 'muted' : dirClass(v)}">${v == null ? 'Không có dữ liệu' : signed(v, 0)}</div>
-        <div class="dbar" role="img" aria-label="${label}: ${v ?? 'không có'} trên thang -100 đến 100">
-          <div class="mid"></div>
-          ${v ? `<div class="fill ${v > 0 ? 'pos' : 'neg'}" style="width:${width}%"></div>` : ''}
-        </div>
-        <div class="dbar-scale"><span>−100 Tiêu cực</span><span>0</span><span>+100 Tích cực</span></div>
-      </div>
+      <rect class="bar ${cls}" x="${x}" y="${y}" width="${barW}" height="${barH}" rx="2">
+        <title>${d.date}: ${val >= 0 ? '+' : ''}${valBillion} tỷ (Mua: ${(d.buyVal / 1e9).toFixed(1)} tỷ, Bán: ${(d.sellVal / 1e9).toFixed(1)} tỷ)</title>
+      </rect>
+      ${i % 3 === 0 ? `<text x="${x + barW / 2}" y="${h - 6}" text-anchor="middle">${dateStr}</text>` : ''}
     `;
   }).join('');
+
+  container.innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}">
+      <line class="zero" x1="0" y1="${midY}" x2="${w}" y2="${midY}"></line>
+      ${svgBars}
+    </svg>
+  `;
+
+  summaryEl.textContent = `${f.buyDays5 ?? '–'}/5 phiên mua ròng gần nhất`;
+  setFold('sec-foreign', `${(f.net5 || 0) >= 0 ? 'Mua' : 'Bán'} ròng ${fmt(Math.abs(f.net5 || 0) / 1e9, 0)} tỷ / 5 phiên`, dirClass(f.net5));
+  statsEl.innerHTML = `
+    <span>Phiên gần nhất: <b class="${dirClass(f.net1)}">${signed((f.net1 || 0) / 1e9, 1)} tỷ</b></span>
+    <span>Mua ròng 5 phiên: <b class="${dirClass(f.net5)}">${signed((f.net5 || 0) / 1e9, 1)} tỷ</b></span>
+    <span>Mua ròng 20 phiên: <b class="${dirClass(f.net20)}">${signed((f.net20 || 0) / 1e9, 1)} tỷ</b></span>
+    <span>Tỷ lệ so với GTGD: <b>${f.ratio20 != null ? `${signed(f.ratio20, 1)}%` : '–'}</b></span>
+  `;
 }
 
 // Cho phép vuốt dọc trên điện thoại để cuộn trang thay vì bị biểu đồ giữ lại
@@ -1370,11 +1226,47 @@ function renderRangeButtons() {
   document.querySelectorAll('#chart-tf button').forEach((b) => b.classList.toggle('on', b.dataset.tf === state.chartTf));
 }
 
+// Các lớp có thể bật/tắt trên biểu đồ giá (nhớ theo trình duyệt)
+const CHART_LAYERS = [
+  { key: 'ma20', label: 'MA20', color: '--s1' },
+  { key: 'ma50', label: 'MA50', color: '--s2' },
+  { key: 'ma200', label: 'MA200', color: '--s3' },
+  { key: 'cone', label: 'Dải 20 phiên tới', color: '--accent', daily: true },
+  { key: 'stop', label: 'Ngưỡng thoát', color: '--down' },
+  { key: 'vol', label: 'Khối lượng', color: '--muted' },
+];
+state.chartLayers = (() => {
+  const def = { ma20: true, ma50: true, ma200: true, cone: true, stop: true, vol: true };
+  try { return { ...def, ...JSON.parse(localStorage.getItem('vnstock_chart_layers') || '{}') }; } catch { return def; }
+})();
+
 /** Vẽ biểu đồ theo khung đang chọn: nến ngày lấy từ kết quả phân tích, nến tuần/tháng tải riêng (lịch sử dài hơn). */
+// Dải thống kê dùng chung giữa biểu đồ giá và thẻ Dự báo (một lần gọi cho mỗi mã, số phiên và lần phân tích)
+const fcCache = new Map();
+function getForecastData(a, h) {
+  const key = `${a.symbol}:${h}:${a.updatedAt}`;
+  if (!fcCache.has(key)) {
+    const p = api(`/api/forecast/${a.symbol}?h=${h}`);
+    p.catch(() => fcCache.delete(key));
+    fcCache.set(key, p);
+  }
+  return fcCache.get(key);
+}
+
 async function renderChart(a) {
   renderRangeButtons();
   const tf = state.chartTf;
-  if (tf === 'D') return drawChart(a, a.chart, tf);
+  if (tf === 'D') {
+    const key = `${a.symbol}:${a.updatedAt}`;
+    drawChart(a, a.chart, tf, state.coneFor === key ? state.cone : null);
+    if (a.isIndex || state.coneFor === key || !state.chartLayers.cone) return;
+    const req = ++chartReq;
+    const d = await getForecastData(a, 20).catch(() => null);
+    if (!d || req !== chartReq || state.current !== a || state.chartTf !== 'D') return;
+    state.cone = d.cone; state.coneFor = key;
+    drawChart(a, a.chart, tf, d.cone);
+    return;
+  }
   const key = `${a.symbol}:${tf}`;
   const req = ++chartReq;
   if (!state.chartCache.has(key)) {
@@ -1390,7 +1282,9 @@ async function renderChart(a) {
   drawChart(a, state.chartCache.get(key), tf);
 }
 
-function drawChart(a, data, tf) {
+const dmy = (t) => (t ? `${t.slice(8, 10)}/${t.slice(5, 7)}/${t.slice(0, 4)}` : '');
+
+function drawChart(a, data, tf, coneData = null) {
   const el = $('chart');
   if (state.chart) {
     state.chart.remove();
@@ -1402,102 +1296,111 @@ function drawChart(a, data, tf) {
   }
   el.innerHTML = '';
   const LC = window.LightweightCharts;
+  const L = state.chartLayers;
   const chart = LC.createChart(el, {
     autoSize: true,
     ...CHART_TOUCH,
-    layout: {
-      background: { color: css('--surface') },
-      textColor: css('--muted'),
-      fontFamily: 'Inter, system-ui, sans-serif',
+    layout: { background: { color: css('--surface') }, textColor: css('--muted'), fontFamily: 'Inter, system-ui, sans-serif', fontSize: 11 },
+    grid: { vertLines: { visible: false }, horzLines: { color: css('--grid') } },
+    rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: L.vol ? 0.22 : 0.06 } },
+    timeScale: { borderVisible: false, rightOffset: 4 },
+    crosshair: {
+      mode: LC.CrosshairMode.Normal,
+      vertLine: { color: css('--muted'), labelBackgroundColor: css('--surface-2') },
+      horzLine: { color: css('--muted'), labelBackgroundColor: css('--surface-2') },
     },
-    grid: {
-      vertLines: { color: css('--grid') },
-      horzLines: { color: css('--grid') },
-    },
-    rightPriceScale: { borderColor: css('--axis') },
-    timeScale: { borderColor: css('--axis') },
-    crosshair: { mode: LC.CrosshairMode.Normal },
-    localization: { locale: 'vi-VN' },
+    watermark: { visible: true, text: `${a.symbol} · ${tf === 'W' ? 'Tuần' : tf === 'M' ? 'Tháng' : 'Ngày'}`, fontSize: 40, color: withAlpha(css('--muted'), 0.08) },
+    localization: { locale: 'vi-VN', priceFormatter: (v) => fmt(v) },
   });
 
   const up = css('--up') || '#10b981';
   const down = css('--down') || '#f43f5e';
-
-  const candles = chart.addCandlestickSeries({
-    upColor: up,
-    downColor: down,
-    wickUpColor: up,
-    wickDownColor: down,
-    borderVisible: false,
-  });
+  const candles = chart.addCandlestickSeries({ upColor: up, downColor: down, wickUpColor: up, wickDownColor: down, borderVisible: false, priceLineColor: css('--muted'), priceLineStyle: LC.LineStyle.Dotted });
   candles.setData(data.bars.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
 
-  const lineOpts = (color) => ({ color, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-  const ma = [
-    ['MA20', chart.addLineSeries(lineOpts(css('--s1') || '#38bdf8')), data.sma20],
-    ['MA50', chart.addLineSeries(lineOpts(css('--s2') || '#fb923c')), data.sma50],
-    ['MA200', chart.addLineSeries(lineOpts(css('--s3') || '#a855f7')), data.sma200],
-  ];
-  ma.forEach(([, s, data]) => s.setData(data));
-
-  const vol = chart.addHistogramSeries({
-    priceFormat: { type: 'volume' },
-    priceScaleId: 'vol',
-    lastValueVisible: false,
-    priceLineVisible: false,
+  const lineOpts = (color, extra = {}) => ({ color, lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...extra });
+  const ma = [['ma20', data.sma20], ['ma50', data.sma50], ['ma200', data.sma200]].map(([key, pts]) => {
+    const lay = CHART_LAYERS.find((x) => x.key === key);
+    if (L[key]) chart.addLineSeries(lineOpts(css(lay.color))).setData(pts);
+    return { key, at: new Map(pts.map((p) => [p.time, p.value])) };
   });
-  vol.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-  candles.priceScale().applyOptions({ scaleMargins: { top: 0.06, bottom: 0.24 } });
-  vol.setData(data.bars.map((b, i, arr) => ({
-    time: b.time,
-    value: b.volume,
-    color: withAlpha(i && b.close < arr[i - 1].close ? down : up, 0.4),
-  })));
 
-  if (a.plan) {
-    // Ngưỡng thoát của luật nắm giữ (−15% giá vốn, hoặc giá hiện tại nếu chưa có cổ phiếu); kháng cự chỉ để tham khảo
-    const warn = a.brief?.levels?.holdStop ?? a.plan.hold?.warnStop;
-    if (warn) candles.createPriceLine({ price: warn, color: down, lineWidth: 1, lineStyle: LC.LineStyle.Dashed, axisLabelVisible: true, title: 'Ngưỡng thoát' });
-    if (a.plan.target) candles.createPriceLine({ price: a.plan.target, color: up, lineWidth: 1, lineStyle: LC.LineStyle.Dotted, axisLabelVisible: true, title: 'Kháng cự' });
+  if (L.vol) {
+    const vol = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false });
+    vol.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    vol.setData(data.bars.map((b, i, arr) => ({ time: b.time, value: b.volume, color: withAlpha(i && b.close < arr[i - 1].close ? down : up, 0.35) })));
   }
 
-  // Vẽ dải nón dự phóng Monte Carlo 20 phiên tương lai (P90, Median P50, P10)
-  if (tf === 'D' && a.monteCarlo?.projectionSeries?.length && data.bars.length) {
-    const lastBar = data.bars.at(-1);
-    const startPoint = { time: lastBar.time, value: lastBar.close };
-    const p90 = [startPoint, ...a.monteCarlo.projectionSeries.map((s) => ({ time: s.time, value: s.p90 }))];
-    const p50 = [startPoint, ...a.monteCarlo.projectionSeries.map((s) => ({ time: s.time, value: s.p50 }))];
-    const p10 = [startPoint, ...a.monteCarlo.projectionSeries.map((s) => ({ time: s.time, value: s.p10 }))];
+  // Ngưỡng thoát của luật nắm giữ (−15% giá vốn, hoặc −15% giá hiện tại nếu chưa có cổ phiếu)
+  const warn = a.brief?.levels?.holdStop ?? a.plan?.hold?.warnStop;
+  if (L.stop && warn) candles.createPriceLine({ price: warn, color: down, lineWidth: 1, lineStyle: LC.LineStyle.Dashed, axisLabelVisible: true, title: 'Ngưỡng thoát' });
 
-    const sP90 = chart.addLineSeries({ color: '#10b981', lineWidth: 1.5, lineStyle: LC.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: true, title: 'MC P90' });
-    sP90.setData(p90);
-    const sP50 = chart.addLineSeries({ color: '#f59e0b', lineWidth: 2, lineStyle: LC.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: true, title: 'MC Trung vị' });
-    sP50.setData(p50);
-    const sP10 = chart.addLineSeries({ color: '#ef4444', lineWidth: 1.5, lineStyle: LC.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: true, title: 'MC P10' });
-    sP10.setData(p10);
+  // Dải dao động 20 phiên tới (cùng dải thống kê với thẻ Dự báo): trung vị và khoảng 90% (5–95%)
+  const proj = tf === 'D' && L.cone && data.bars.length && coneData ? coneData.map((c) => ({ time: c.date, p10: c.p05, p50: c.p50, p90: c.p95 })) : [];
+  const cone = new Map(proj.map((s) => [s.time, s]));
+  const lastClose = data.bars.at(-1)?.close;
+  if (proj.length) {
+    const start = { time: data.bars.at(-1).time, value: lastClose };
+    const acc = css('--accent');
+    const edge = lineOpts(withAlpha(acc, 0.6), { lineWidth: 1, lineStyle: LC.LineStyle.Dotted });
+    chart.addLineSeries(edge).setData([start, ...proj.map((s) => ({ time: s.time, value: s.p90 }))]);
+    chart.addLineSeries(edge).setData([start, ...proj.map((s) => ({ time: s.time, value: s.p10 }))]);
+    chart.addLineSeries(lineOpts(acc, { lineWidth: 2, lineStyle: LC.LineStyle.Dashed, lastValueVisible: true, title: 'Trung vị' }))
+      .setData([start, ...proj.map((s) => ({ time: s.time, value: s.p50 }))]);
   }
 
+  // Thanh giá: ngày, OHLC, % và khối lượng của nến đang trỏ; ngày tương lai thì hiện dải dự báo
   const legend = $('chart-legend');
-  const barByTime = new Map(data.bars.map((b) => [b.time, b]));
+  const idxByTime = new Map(data.bars.map((b, i) => [b.time, i]));
+  const q = (k, v, cls = '') => `<div class="q-item"><span>${k}</span><b class="num ${cls}">${v}</b></div>`;
+  const updateLayerValues = (t) => {
+    for (const m of ma) {
+      const node = document.querySelector(`#chart-layers [data-layer="${m.key}"] .lc-val`);
+      const v = t ? m.at.get(t) : null;
+      if (node) node.textContent = v != null ? fmt(v) : '';
+    }
+  };
   const showLegend = (time) => {
-    const b = barByTime.get(time) || data.bars.at(-1);
+    const f = time && cone.get(time);
+    if (f) {
+      const cls = dirClass(f.p50 - lastClose);
+      legend.innerHTML = `<div class="q-date">${dmy(time)} <span class="q-tag">dự báo</span></div>
+        ${q('Trung vị', fmt(f.p50), cls)}${q('90% trong khoảng', `${fmt(f.p10)} – ${fmt(f.p90)}`)}
+        ${q('So với hiện tại', `${signed((f.p50 / lastClose - 1) * 100, 1)}%`, cls)}`;
+      updateLayerValues(null);
+      return;
+    }
+    const i = idxByTime.get(time) ?? data.bars.length - 1;
+    const b = data.bars[i];
     if (!b) return;
-    const i = data.bars.indexOf(b);
     const prev = data.bars[i - 1];
     const ch = prev ? ((b.close - prev.close) / prev.close) * 100 : 0;
-    const maVals = ma.map(([name, , data]) => {
-      const p = data.find((d) => d.time === b.time);
-      return p ? `${name} <b>${fmt(p.value)}</b>` : '';
-    }).filter(Boolean).join(' · ');
-    legend.innerHTML = `${tf === 'W' ? 'Tuần từ ' : tf === 'M' ? 'Tháng ' : ''}${tf === 'M' ? b.time.slice(0, 7) : b.time} · Mở <b>${fmt(b.open)}</b> · Cao <b>${fmt(b.high)}</b> · Thấp <b>${fmt(b.low)}</b> · Đóng <b>${fmt(b.close)}</b>
-      <span class="${dirClass(ch)}">${signed(ch)}%</span> · Khối lượng <b>${fmt(b.volume, 0)}</b>${maVals ? ` · ${maVals}` : ''}`;
+    const label = tf === 'W' ? `Tuần từ ${dmy(b.time)}` : tf === 'M' ? `Tháng ${b.time.slice(5, 7)}/${b.time.slice(0, 4)}` : dmy(b.time);
+    legend.innerHTML = `<div class="q-date">${label}</div>
+      ${q('Mở', fmt(b.open))}${q('Cao', fmt(b.high))}${q('Thấp', fmt(b.low))}
+      <div class="q-item q-close"><span>Đóng</span><b class="num">${fmt(b.close)}</b><em class="num ${dirClass(ch)}">${signed(ch)}%</em></div>
+      ${q('Khối lượng', fmt(b.volume, 0))}`;
+    updateLayerValues(b.time);
   };
+  renderLayerChips(tf, Boolean(warn));
   chart.subscribeCrosshairMove((p) => showLegend(p.time));
   showLegend(null);
 
+  $('chart-foot').textContent = proj.length
+    ? 'Vùng bên phải: giá có thể dao động trong 20 phiên tới (ước lượng biên độ, không dự báo hướng).'
+    : `Mỗi nến là một ${CHART_TF[tf].unit}.`;
+
   state.chart = chart;
   state.chartBars = data.bars.length;
+  state.chartAhead = proj.length;
   setRange(state.chartDays);
+}
+
+function renderLayerChips(tf, hasStop) {
+  $('chart-layers').innerHTML = CHART_LAYERS
+    .filter((l) => (!l.daily || tf === 'D') && (l.key !== 'stop' || hasStop))
+    .map((l) => `<button type="button" class="layer-chip${state.chartLayers[l.key] ? ' on' : ''}" data-layer="${l.key}" aria-pressed="${!!state.chartLayers[l.key]}">
+      <i class="lc-sw lc-${l.key}" style="--c:var(${l.color})"></i>${l.label}<span class="lc-val num"></span></button>`).join('');
 }
 
 function setRange(days) {
@@ -1505,9 +1408,18 @@ function setRange(days) {
   document.querySelectorAll('#range button').forEach((b) => b.classList.toggle('on', Number(b.dataset.days) === days));
   if (!state.chart || !state.current) return;
   const n = state.chartBars || 0;
-  if (!days || days >= n) state.chart.timeScale().fitContent();
-  else state.chart.timeScale().setVisibleLogicalRange({ from: n - days, to: n + 2 });
+  const ahead = (state.chartAhead || 0) + 3; // chừa chỗ cho dải dự báo phía bên phải
+  state.chart.timeScale().setVisibleLogicalRange({ from: !days || days >= n ? 0 : n - days, to: n + ahead });
 }
+
+$('chart-layers')?.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-layer]');
+  if (!b || !state.current) return;
+  const k = b.dataset.layer;
+  state.chartLayers[k] = !state.chartLayers[k];
+  try { localStorage.setItem('vnstock_chart_layers', JSON.stringify(state.chartLayers)); } catch { /* bỏ qua */ }
+  renderChart(state.current);
+});
 
 $('chart-tf')?.addEventListener('click', (e) => {
   const b = e.target.closest('button[data-tf]');
@@ -1523,28 +1435,7 @@ $('range')?.addEventListener('click', (e) => {
   if (b) setRange(Number(b.dataset.days));
 });
 
-// ---------- Tín hiệu & Kế hoạch ----------
-function renderSignals(a) {
-  const groups = [
-    ['Tín hiệu Kỹ thuật', a.technical.signals],
-    ['Tín hiệu Cơ bản', a.fundamental.signals],
-    ['Tín hiệu Tin tức', a.news.signals],
-  ].filter(([, list]) => list.length);
-
-  $('r-signals').innerHTML = groups.map(([title, list]) => `
-    <div class="sig-group">
-      <h4>${title}</h4>
-      ${list.map((s) => `
-        <div class="sig">
-          <span class="ico ${dirClass(s.points)}">${s.points > 0 ? '+' : s.points < 0 ? '−' : '·'}</span>
-          <span>${esc(s.text)}</span>
-          <span class="pts">${signed(s.points, 0)}</span>
-        </div>
-      `).join('')}
-    </div>
-  `).join('');
-}
-
+// ---------- Mức giá & chỉ báo ----------
 function kv(rows) {
   return rows.map(([k, v, cls = '']) => `<span class="k">${k}</span><span class="v ${cls}">${v}</span>`).join('');
 }
@@ -1592,6 +1483,7 @@ function renderFundamentals(a) {
   $('fund-card').hidden = !f;
   if (!f) return;
   $('r-fund-date').textContent = f.reportDate ? `BCTC kỳ ${f.reportDate}` : '';
+  setFold('sec-fund', `P/E ${fmt(f.pe, 1)} · ROE ${fmtPct(f.roe)} · LN 4 quý ${fmtPct(f.profitGrowthTTM)}`);
   const items = [
     ['P/E', fmt(f.pe, 1)], ['P/B', fmt(f.pb, 2)], ['P/S', fmt(f.ps, 2)],
     ['EPS 4 quý (VNĐ)', fmt(f.epsTTM, 0)], ['BVPS (VNĐ)', fmt(f.bookValuePerShare, 0)],
@@ -1616,6 +1508,7 @@ const LABELS = { tich_cuc: 'Tích cực', tieu_cuc: 'Tiêu cực', trung_lap: 'T
 function renderNews(a) {
   const items = a.news.items.filter((n) => state.newsFilter === 'all' || n.label === state.newsFilter);
   const f = a.news.aiFilter;
+  setFold('sec-news', `${a.news.positive} tích cực · ${a.news.negative} tiêu cực`, a.news.negative > a.news.positive ? 'down' : a.news.positive > a.news.negative ? 'up' : '');
   $('r-news-count').textContent = `(${a.news.count} tin · ${a.news.positive} tích cực · ${a.news.negative} tiêu cực${f?.checked ? ` · AI đã lọc${f.removed.length ? `, bỏ ${f.removed.length} tin không liên quan` : ''}` : ''})`;
   $('r-news').innerHTML = items.length ? items.map((n) => `
     <li>
@@ -1750,10 +1643,7 @@ function applyAiToDecision(a, ai) {
   // Kết luận, trạng thái AI, hành động và mức giá hiển thị ở thẻ Tóm tắt; ở đây chỉ thay căn cứ chi tiết
   if (!ai) return;
 
-  const li = (arr) => arr.slice(0, 3).map((x) => `<li>${esc(x)}</li>`).join('');
-  if (ai.bullCase?.length) $('dc-pros').innerHTML = li(ai.bullCase);
-  if (ai.bearCase?.length) $('dc-cons').innerHTML = li(ai.bearCase);
-  if (ai.watchItems?.length) $('dc-watch').innerHTML = `<b>👁 Cần theo dõi:</b> ${ai.watchItems.slice(0, 3).map(esc).join(' · ')}`;
+  // Điểm mạnh / rủi ro giữ bản đã kiểm định; luận điểm của AI xem ở thẻ AI
   if (ai.marketFlowView) {
     const flow = $('dc-flow');
     flow.querySelector('.dc-note')?.remove();
@@ -1765,7 +1655,7 @@ function applyAiToDecision(a, ai) {
 const PICK_TONE = { MUA: 'up', MUA_THAM_DO: 'up', CHO_DIEM_MUA: 'ref', LOAI: 'down' };
 
 function showPicks() {
-  ['empty', 'error', 'report', 'loading', 'portfolio', 'rankview', 'sectorview', 'autoview'].forEach((id) => ($(id).hidden = true));
+  ['marketview', 'empty', 'error', 'report', 'loading', 'portfolio', 'rankview', 'sectorview', 'autoview'].forEach((id) => ($(id).hidden = true));
   $('auto-btn')?.classList.remove('on');
   markMobileView('picks', 'picks');
   $('sector-btn')?.classList.remove('on');
@@ -2065,22 +1955,14 @@ $('picks')?.addEventListener('click', async (e) => {
 });
 
 function renderAi(r) {
+  setFold('sec-ai', r.decisionLabel, DECISION_TONE[r.decision] || '');
   const close = state.current?.price.close;
   const stale = close != null && r.price !== close;
   const list = (title, items, cls = '') => (items?.length
     ? `<div><h4 class="${cls}">${title}</h4><ul>${items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '');
-  const pctFrom = (v) => (close ? ` <span class="muted small">${signed(((v - close) / close) * 100, 1)}%</span>` : '');
-  const levels = [
-    r.entryZone && ['Vùng mua', `${fmt(r.entryZone.from)} – ${fmt(r.entryZone.to)}`, ''],
-    r.stopLoss != null && ['Cắt lỗ', fmt(r.stopLoss) + pctFrom(r.stopLoss), 'down'],
-    ...r.targets.map((t, i) => [`Mục tiêu ${i + 1}`, fmt(t) + pctFrom(t), 'up']),
-    ['Khung thời gian', esc(r.horizon), ''],
-  ].filter(Boolean);
-
   $('ai-body').innerHTML = `
     <div class="ai-head">
       <span class="recommendation-badge ${r.decision}">${esc(r.decisionLabel)}</span>
-      <span>Độ tin cậy <b>${r.confidence}%</b></span>
       <span class="muted small">${esc(r.model)} · ${new Date(r.createdAt).toLocaleString('vi-VN')} · Tại giá ${fmt(r.price)}${stale ? ' (giá đã đổi, nên phân tích lại)' : ''}</span>
     </div>
     <p class="ai-summary">${esc(r.summary)}</p>
@@ -2088,7 +1970,6 @@ function renderAi(r) {
       <div class="ai-box"><h4>Nếu chưa có cổ phiếu</h4>${esc(r.forNewBuyers)}</div>
       <div class="ai-box"><h4>Nếu đang nắm giữ</h4>${esc(r.forHolders)}</div>
     </div>
-    <div class="ai-levels">${levels.map(([k, v, cls]) => `<div class="fund-item"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`).join('')}</div>
     ${r.positionSizing ? `<div class="ai-box" style="margin-bottom:14px"><h4>Quản lý vốn & tỷ trọng</h4>${esc(r.positionSizing)}</div>` : ''}
     <div class="ai-lists">
       ${list('▲ Luận điểm ủng hộ', r.bullCase, 'up')}
@@ -2190,379 +2071,7 @@ $('btn-quick-scan')?.addEventListener('click', async () => {
   showToast('Đã quét xong toàn bộ danh mục!', 'success');
 });
 
-// ---------- Backtest chiến lược ----------
-const BT = { strategies: [], chart: null, result: null };
-const BT_PARAM_LABELS = {
-  score: { buy: 'Điểm mua ≥', sell: 'Điểm bán ≤' },
-  ma_cross: { fast: 'MA nhanh', slow: 'MA chậm' },
-  rsi_reversion: { low: 'RSI vào <', exit: 'RSI thoát >' },
-  breakout: { entry: 'Đỉnh N phiên', exit: 'Đáy M phiên' },
-};
 const pct = (v, d = 1) => (v == null ? '–' : `${signed(v * 100, d)}%`);
-
-async function initBacktest() {
-  BT.strategies = await api('/api/backtest/strategies').catch(() => []);
-  const elStrat = $('bt-strategy');
-  if (elStrat) {
-    elStrat.innerHTML = BT.strategies.map((s) => `<option value="${s.id}">${esc(s.label)}</option>`).join('');
-    renderBtParams();
-  }
-}
-
-function renderBtParams() {
-  const elStrat = $('bt-strategy');
-  if (!elStrat) return;
-  const s = BT.strategies.find((x) => x.id === elStrat.value);
-  if (!s) return;
-  const labels = BT_PARAM_LABELS[s.id] || {};
-  const elParams = $('bt-params');
-  if (elParams) {
-    elParams.innerHTML = Object.entries(s.params).map(([k, v]) =>
-      `<label><span>${esc(labels[k] || k)}</span><input name="${k}" type="number" step="1" value="${v}"></label>`).join('');
-  }
-  const elDesc = $('bt-desc');
-  if (elDesc) elDesc.textContent = s.desc;
-}
-$('bt-strategy')?.addEventListener('change', renderBtParams);
-
-function resetBacktest(a) {
-  const elCard = $('bt-card');
-  if (elCard) elCard.hidden = a.isIndex;
-  loadForecast(a);
-  BT.result = null;
-  if (BT.chart) { BT.chart.remove(); BT.chart = null; }
-  const elBody = $('bt-body');
-  if (elBody) elBody.innerHTML = `<p class="muted" style="padding:6px 0">Chọn chiến lược rồi bấm <b>Chạy backtest</b> để xem chiến lược đó đã hoạt động ra sao trên ${esc(a.symbol)} trong quá khứ.</p>`;
-}
-
-$('bt-form')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const a = state.current;
-  if (!a) return;
-  const q = new URLSearchParams();
-  for (const [k, v] of new FormData(e.target)) if (v !== '') q.set(k, v);
-  $('bt-run').disabled = true;
-  $('bt-body').innerHTML = `<div class="loading-state" style="border:none;padding:30px">
-    <div class="radar-spinner"><div class="spinner-ring"></div><div class="spinner-dot"></div></div>
-    <span>Đang mô phỏng giao dịch ${esc(a.symbol)}…</span></div>`;
-  try {
-    const r = await api(`/api/backtest/${a.symbol}?${q}`);
-    if (state.current?.symbol !== a.symbol) return;
-    BT.result = r;
-    renderBacktest(r);
-  } catch (err) {
-    $('bt-body').innerHTML = `<p class="error" style="padding:16px">${esc(err.message)}</p>`;
-  } finally {
-    $('bt-run').disabled = false;
-  }
-});
-
-function btVerdict(r) {
-  const m = r.metrics;
-  const beatBH = m.totalReturn > r.buyHold.totalReturn;
-  const beatIdx = m.benchmarkReturn == null || m.totalReturn > m.benchmarkReturn;
-  const few = m.tradeCount < 5;
-  if (m.totalReturn <= 0) return ['down', `Chiến lược lỗ ${pct(m.totalReturn)} trong ${r.period.years} năm: tín hiệu này không hiệu quả trên ${r.symbol}.`];
-  if (beatBH && beatIdx) return [few ? 'ref' : 'up', `Chiến lược thắng cả mua & nắm giữ (${pct(r.buyHold.totalReturn)}) và VN-Index (${pct(m.benchmarkReturn)})${few ? ', nhưng số lệnh quá ít để tin cậy' : ''}.`];
-  if (beatBH) return ['ref', `Có lãi và tốt hơn mua & nắm giữ, nhưng thua VN-Index (${pct(m.benchmarkReturn)}).`];
-  return ['ref', `Có lãi nhưng thua mua & nắm giữ (${pct(r.buyHold.totalReturn)}): giao dịch theo tín hiệu chưa tạo giá trị tăng thêm.`];
-}
-
-function renderBacktest(r) {
-  const m = r.metrics;
-  const [tone, verdict] = btVerdict(r);
-  const kpi = (k, v, cls = '') => `<div class="fund-item"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
-  const b = r.blocked;
-  const blockedTotal = b.ceiling + b.floor + b.settlement;
-  const bs = r.bootstrap, wf = r.walkForward;
-  const signal = r.currentSignal === 'HOLD'
-    ? `<span class="up">đang NẮM GIỮ</span>${r.openPosition ? ` từ ${r.openPosition.entryTime} giá ${fmt(r.openPosition.entryPrice)} (${signed(r.openPosition.returnPct)}%)` : ''}`
-    : '<span class="ref">đang ĐỨNG NGOÀI</span>';
-
-  let sens = '';
-  if (r.sensitivity) {
-    const s = r.sensitivity;
-    const cell = (c) => {
-      if (!c) return '<td class="muted">–</td>';
-      const alpha = Math.min(0.55, Math.abs(c.returnPct) / 120 + 0.08);
-      const bg = c.returnPct >= 0 ? `rgba(16,185,129,${alpha})` : `rgba(244,63,94,${alpha})`;
-      return `<td style="background:${bg}"><b>${signed(c.returnPct, 1)}%</b><div class="muted small">${c.trades} lệnh</div></td>`;
-    };
-    sens = `<div class="bt-block"><h4>Độ nhạy tham số <span class="muted small">· lợi nhuận theo ngưỡng mua (cột) × bán (hàng). Kết quả tốt ở nhiều ô lân cận thì đáng tin hơn một ô đơn lẻ.</span></h4>
-      <div class="tbl-wrap"><table class="tbl bt-sens"><thead><tr><th>Bán ≤ \\ Mua ≥</th>${s.buys.map((x) => `<th>${x}</th>`).join('')}</tr></thead>
-      <tbody>${s.sells.map((sv, i) => `<tr><th>${sv}</th>${s.grid[i].map(cell).join('')}</tr>`).join('')}</tbody></table></div></div>`;
-  }
-
-  $('bt-body').innerHTML = `
-    <div class="bt-verdict tone-${tone}">${esc(verdict)}</div>
-    <div class="muted small" style="margin:6px 0 12px">${esc(r.strategyLabel)} · ${r.period.from} → ${r.period.to} (${r.period.bars} phiên) · sàn ${r.exchange} biên độ ±${Math.round(r.config.band * 100)}% · vốn ${fmtBig(r.config.initialCash)} · Tín hiệu hiện tại: ${signal}${r.currentScore != null ? ` · điểm kỹ thuật ${signed(r.currentScore, 0)}` : ''}</div>
-    <div class="ai-levels bt-kpis">
-      ${kpi('Lợi nhuận', pct(m.totalReturn), dirClass(m.totalReturn))}
-      ${kpi('Mỗi năm', pct(m.annualReturn), dirClass(m.annualReturn))}
-      ${kpi('Mua & nắm giữ', pct(r.buyHold.totalReturn), dirClass(r.buyHold.totalReturn))}
-      ${kpi('VN-Index', pct(m.benchmarkReturn), dirClass(m.benchmarkReturn))}
-      ${kpi('Sụt giảm tối đa', pct(m.maxDrawdown), 'down')}
-      ${kpi('Sụt giảm mua & giữ', pct(r.buyHold.maxDrawdown), 'down')}
-      ${kpi('Sharpe', fmt(m.sharpe))}
-      ${kpi('Sortino', fmt(m.sortino))}
-      ${kpi('Số lệnh', fmt(m.tradeCount, 0))}
-      ${kpi('Tỷ lệ thắng', m.winRate == null ? '–' : `${fmt(m.winRate * 100, 0)}%`)}
-      ${kpi('Profit factor', fmt(m.profitFactor))}
-      ${kpi('Lãi TB / Lỗ TB', `${m.avgWinPct == null ? '–' : `+${fmt(m.avgWinPct, 1)}%`} / ${m.avgLossPct == null ? '–' : `${fmt(m.avgLossPct, 1)}%`}`)}
-      ${kpi('Giữ TB', m.avgHoldingBars == null ? '–' : `${fmt(m.avgHoldingBars, 0)} phiên`)}
-      ${kpi('Thời gian cầm CP', `${fmt(r.exposure * 100, 0)}%`)}
-      ${kpi('Phí + thuế', fmtBig(r.fees))}
-      ${kpi('Beta', fmt(m.beta))}
-    </div>
-    <div class="legend" id="bt-legend" style="margin-top:14px">
-      <span style="color:var(--accent)">━ Chiến lược</span> · <span style="color:var(--s2)">━ Mua & nắm giữ</span> · <span style="color:var(--muted)">━ VN-Index (cùng vốn)</span>
-    </div>
-    <div id="bt-chart" class="bt-chart"></div>
-    <div class="bt-grid">
-      <div class="bt-block"><h4>Kiểm định độ tin cậy</h4>
-        ${bs.error ? `<p class="muted small">${esc(bs.error)}</p>` : `<div class="kv">
-          <span class="k">Xác suất có lãi (bootstrap ${bs.simulations} lần)</span><span class="v ${bs.probProfit >= 0.7 ? 'up' : bs.probProfit < 0.5 ? 'down' : ''}">${fmt(bs.probProfit * 100, 0)}%</span>
-          <span class="k">Lợi nhuận khoảng 5% – 95%</span><span class="v">${pct(bs.returnP5)} → ${pct(bs.returnP95)}</span>
-          <span class="k">Sụt giảm xấu (5%)</span><span class="v down">${pct(bs.drawdownP5)}</span></div>`}
-        ${wf.error ? '' : `<h4 style="margin-top:12px">Theo giai đoạn <span class="muted small">· ${wf.profitable} lãi, ${wf.losing} lỗ / ${wf.windows.length}</span></h4>
-          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Giai đoạn</th><th>Lợi nhuận</th><th>Sụt giảm</th><th>Lệnh</th></tr></thead><tbody>
-          ${wf.windows.map((w) => `<tr><td>${w.from} → ${w.to}</td><td class="${dirClass(w.returnPct)}">${signed(w.returnPct, 1)}%</td><td class="down">${fmt(w.maxDrawdownPct, 1)}%</td><td>${w.trades}</td></tr>`).join('')}
-          </tbody></table></div>`}
-      </div>
-      <div class="bt-block"><h4>Luật thị trường VN đã áp dụng</h4>
-        <div class="kv">
-          <span class="k">Lệnh mua bị chặn (mở cửa giá trần)</span><span class="v">${b.ceiling}</span>
-          <span class="k">Lệnh bán bị chặn (mở cửa giá sàn)</span><span class="v">${b.floor}</span>
-          <span class="k">Lệnh bán phải chờ cổ phiếu về (T+2)</span><span class="v">${b.settlement}</span>
-          <span class="k">Phí môi giới / thuế bán</span><span class="v">${fmt(r.config.brokerage * 100, 2)}% / ${fmt(r.config.sellTax * 100, 2)}%</span>
-          <span class="k">Trượt giá mỗi lệnh</span><span class="v">${fmt(r.config.slippage * 100, 2)}%</span>
-        </div>
-        ${blockedTotal ? `<p class="muted small" style="margin-top:8px">${blockedTotal} lần lệnh bị dời sang phiên sau do luật giao dịch — điều mà backtest thông thường bỏ qua.</p>` : ''}
-        <ul class="bt-notes">${r.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
-      </div>
-    </div>
-    ${sens}
-    <div class="bt-block"><h4>Lịch sử giao dịch <span class="muted small">· ${r.trades.length} lệnh gần nhất</span></h4>
-      ${r.trades.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Mua</th><th>Giá mua</th><th>Bán</th><th>Giá bán</th><th>KL</th><th>Lãi/lỗ</th><th>%</th><th>Giữ</th><th>Lý do</th></tr></thead><tbody>
-        ${r.trades.map((t) => `<tr><td>${t.entryTime}</td><td>${fmt(t.entryPrice)}</td><td>${t.exitTime}</td><td>${fmt(t.exitPrice)}</td><td>${fmt(t.shares, 0)}</td>
-          <td class="${dirClass(t.pnl)}">${fmtBig(t.pnl)}</td><td class="${dirClass(t.returnPct)}">${signed(t.returnPct)}%</td><td>${t.bars} phiên</td>
-          <td>${{ signal: 'Tín hiệu', stop: 'Cắt lỗ', target: 'Chốt lời' }[t.reason] || t.reason}</td></tr>`).join('')}
-      </tbody></table></div>` : '<p class="muted small">Không có lệnh nào được đóng trong giai đoạn này.</p>'}
-    </div>`;
-  renderBtChart(r);
-}
-
-function renderBtChart(r) {
-  const el = $('bt-chart');
-  if (!el || !window.LightweightCharts) return;
-  if (BT.chart) { BT.chart.remove(); BT.chart = null; }
-  const LC = window.LightweightCharts;
-  const chart = LC.createChart(el, {
-    autoSize: true,
-    ...CHART_TOUCH,
-    layout: { background: { color: css('--surface') }, textColor: css('--muted'), fontFamily: 'Inter, system-ui, sans-serif' },
-    grid: { vertLines: { color: css('--grid') }, horzLines: { color: css('--grid') } },
-    rightPriceScale: { borderColor: css('--axis') },
-    timeScale: { borderColor: css('--axis') },
-    localization: { locale: 'vi-VN', priceFormatter: (v) => `${(v / 1e6).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} tr` },
-  });
-  const line = (color, width = 2) => chart.addLineSeries({ color, lineWidth: width, priceLineVisible: false, lastValueVisible: true });
-  if (r.curve[0]?.index != null) line(css('--muted'), 1).setData(r.curve.map((p) => ({ time: p.time, value: p.index })));
-  line(css('--s2')).setData(r.curve.map((p) => ({ time: p.time, value: p.buyHold })));
-  line(css('--accent'), 3).setData(r.curve.map((p) => ({ time: p.time, value: p.equity })));
-  chart.timeScale().fitContent();
-  BT.chart = chart;
-}
-
-// ---------- Quá khứ → Tương lai: dự báo giá và lời/lỗ ----------
-const FC = { h: 20, data: null, chart: null, req: 0 };
-const FEE = { brokerage: 0.0015, sellTax: 0.001 };
-const SCN_COLOR = { TANG: '--up', CO_SO: '--accent', GIAM: '--down' };
-
-/** Lời/lỗ khi mua bằng `capital` đồng ở `entry`, bán ở `exit` (lô 100, trừ phí mua/bán và thuế bán). */
-function fcPnl(capital, entry, exit) {
-  const shares = Math.floor(capital / (entry * 1000 * (1 + FEE.brokerage)) / 100) * 100;
-  if (!shares) return { shares: 0, pnl: 0, pct: 0 };
-  const cost = shares * entry * 1000 * (1 + FEE.brokerage);
-  const back = shares * exit * 1000 * (1 - FEE.brokerage - FEE.sellTax);
-  return { shares, pnl: back - cost, pct: (back / cost - 1) * 100 };
-}
-const fcCapital = () => (capitalM() || 100) * 1e6;
-
-async function loadForecast(a) {
-  const card = $('fc-card');
-  card.hidden = a.isIndex;
-  if (a.isIndex) return;
-  $('fc-capital').value = capitalM() || 100;
-  document.querySelectorAll('#fc-h button').forEach((b) => b.classList.toggle('on', Number(b.dataset.h) === FC.h));
-  const req = ++FC.req;
-  $('fc-body').innerHTML = '<div class="loading-state" style="border:none;padding:30px"><span>Đang dựng dự báo…</span></div>';
-  try {
-    const d = await api(`/api/forecast/${a.symbol}?h=${FC.h}`);
-    if (req !== FC.req || state.current?.symbol !== a.symbol) return;
-    FC.data = d;
-    renderForecast(a, d);
-  } catch (err) {
-    if (req === FC.req) $('fc-body').innerHTML = `<p class="error" style="padding:12px">${esc(err.message)}</p>`;
-  }
-}
-
-function renderForecast(a, d) {
-  const H = d.horizon, close = d.close, cap = fcCapital();
-  const end = d.cone.at(-1);
-  const ai = d.ai;
-  const aiH = Math.min(H, 20);
-  const key = `p${[5, 10, 20].find((x) => x >= aiH) || 20}`;
-  const row = (label, prob, price, cls = '', note = '') => {
-    if (price == null) return '';
-    const r = fcPnl(cap, close, price);
-    return `<tr class="${cls}"><td>${label}</td><td>${prob ?? ''}</td><td><b>${fmt(price)}</b></td>
-      <td class="${dirClass(price - close)}">${signed((price / close - 1) * 100, 1)}%</td>
-      <td class="${dirClass(r.pnl)}"><b>${r.shares ? fmtBig(Math.round(r.pnl)) : '–'}</b> <span class="muted small">${r.shares ? `(${signed(r.pct, 1)}%)` : ''}</span></td>
-      <td class="muted small">${note}</td></tr>`;
-  };
-  const aiRows = ai ? ai.scenarios.map((s) => row(`AI · ${esc(s.label)}`, `${s.probability}%`, s[key], `fc-s-${s.name}`, esc(s.trigger))).join('')
-    + row('<b>AI · kỳ vọng (bình quân theo xác suất)</b>', '', ai.expected?.[key], 'fc-exp', esc(ai.rationale || '')) : '';
-  const stRows = [
-    ['Thống kê · xấu (5%)', end.p05], ['Thống kê · 25%', end.p25], ['Thống kê · trung vị', end.p50], ['Thống kê · 75%', end.p75], ['Thống kê · tốt (95%)', end.p95],
-  ].map(([l, p]) => row(l, '', p, 'fc-stat')).join('');
-  const v = d.validation;
-  const good50 = v.coverage50 != null && Math.abs(v.coverage50 - 0.5) <= 0.08;
-  const good90 = v.coverage90 != null && Math.abs(v.coverage90 - 0.9) <= 0.08;
-  const pc = (x) => (x == null ? '–' : `${Math.round(x * 100)}%`);
-  const shares = fcPnl(cap, close, close).shares;
-
-  // Dự báo AI trước đây so với thực tế
-  const matured = d.past.flatMap((f) => f.checks.filter((c) => c.actual != null));
-  const dirOk = matured.filter((c) => c.directionOk).length;
-  const inRange = matured.filter((c) => c.inRange).length;
-  const pastRows = [...d.past].reverse().slice(0, 12).map((f) => {
-    const cells = f.checks.map((c) => c.actual == null
-      ? `<td class="muted small">${c.target != null ? fmt(c.target) : '–'} · chờ</td>`
-      : `<td>${fmt(c.target)} → <b class="${dirClass(c.actual - f.close)}">${fmt(c.actual)}</b> ${c.directionOk ? '<span class="up">✓ hướng</span>' : '<span class="down">✕ hướng</span>'}${c.inRange ? ' · trong dải' : ''}</td>`).join('');
-    return `<tr><td>${f.date}</td><td>${fmt(f.close)}</td>${cells}</tr>`;
-  }).join('');
-
-  $('fc-body').innerHTML = `
-    <div class="fc-summary">
-      <div>Giá hiện tại <b>${fmt(close)}</b> (phiên ${d.date}) · vốn ${fmtBig(cap)} ≈ <b>${shares.toLocaleString('vi-VN')} cp</b> · dự báo đến <b>${end.date}</b> (${H} phiên)</div>
-      ${ai ? `<div>AI: <b>${ai.scenarios.map((s) => `${esc(s.label)} ${s.probability}%`).join(' · ')}</b> <span class="muted small">· ${esc(ai.model || '')}${H > 20 ? ' · AI chỉ dự báo đến 20 phiên' : ''}</span></div>`
-        : `<div class="ref">AI chưa có dự báo kịch bản cho phiên ${d.date}${d.aiStale ? ` (bản gần nhất ngày ${d.aiStale.date})` : ''}. Bấm <b>✦ AI dự báo lại</b>.</div>`}
-      <div class="muted small">Thống kê (không xét xu hướng): xác suất giá sau ${H} phiên đủ bù phí + thuế ≈ <b>${pc(end.probProfit)}</b></div>
-    </div>
-    <div class="legend" id="fc-legend"></div>
-    <div id="fc-chart" class="fc-chart"></div>
-    <div class="fc-key small">
-      <span><i class="fc-sw" style="background:var(--ink)"></i>Giá thật</span>
-      <span><i class="fc-sw dash" style="border-color:var(--muted)"></i>Dự báo cũ (trung vị ${H} phiên trước)</span>
-      <span><i class="fc-sw" style="background:var(--s3)"></i>Dải thống kê 5–95% / 25–75%</span>
-      ${ai ? '<span><i class="fc-sw" style="background:var(--up)"></i>AI tăng</span><span><i class="fc-sw" style="background:var(--accent)"></i>AI cơ sở</span><span><i class="fc-sw" style="background:var(--down)"></i>AI giảm</span>' : ''}
-    </div>
-    <h4 style="margin:14px 0 6px">💰 Nếu mua ${shares.toLocaleString('vi-VN')} cp hôm nay giá ${fmt(close)}, sau ${aiH === H ? H : `${H} phiên (AI: ${aiH})`} phiên</h4>
-    <div class="tbl-wrap"><table class="tbl fc-table"><thead><tr><th>Kịch bản</th><th>Xác suất</th><th>Giá</th><th>%</th><th>Lời / lỗ (vốn ${fmtBig(cap)})</th><th>Điều kiện / ghi chú</th></tr></thead>
-      <tbody>${aiRows}${stRows}</tbody></table></div>
-    <div class="bt-grid" style="margin-top:12px">
-      <div class="bt-block"><h4>🧪 Kiểm chứng dải thống kê trên quá khứ</h4>
-        <div class="kv">
-          <span class="k">Số lần dự báo thử (mỗi ${v.step} phiên, ${v.years} năm)</span><span class="v">${v.n}</span>
-          <span class="k">Dải 25–75% chứa giá thật</span><span class="v ${good50 ? 'up' : 'ref'}">${pc(v.coverage50)} <span class="muted small">(chuẩn 50%)</span></span>
-          <span class="k">Dải 5–95% chứa giá thật</span><span class="v ${good90 ? 'up' : 'ref'}">${pc(v.coverage90)} <span class="muted small">(chuẩn 90%)</span></span>
-          <span class="k">Giá vượt trên dải / thủng dưới dải</span><span class="v">${pc(v.above95)} / ${pc(v.below05)}</span>
-        </div>
-        <p class="muted small" style="margin-top:6px">${good50 && good90 ? 'Dải ước lượng biên độ khá sát thực tế.' : 'Dải lệch so với chuẩn: biến động thật có lúc mạnh hơn lịch sử, nên coi dải 5–95% là tối thiểu.'}
-          Dải chỉ ước lượng <b>biên độ</b>, không dự báo hướng. Đường "dự báo cũ" trên biểu đồ là trung vị đã dự báo từ ${H} phiên trước để bạn so với giá thật.</p>
-      </div>
-      <div class="bt-block"><h4>📒 Dự báo của AI trước đây so với thực tế</h4>
-        ${matured.length ? `<p class="small">Đã chấm ${matured.length} mốc: <b>${pc(dirOk / matured.length)}</b> đúng hướng, <b>${pc(inRange / matured.length)}</b> giá thật nằm trong dải 5–95% lúc dự báo.</p>` : '<p class="muted small">Chưa có dự báo AI nào đủ 5 phiên để chấm. Mỗi lần AI phân tích, dự báo được lưu lại và tự chấm khi đến mốc 5 / 10 / 20 phiên.</p>'}
-        ${pastRows ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ngày dự báo</th><th>Giá lúc đó</th><th>5 phiên (cơ sở → thật)</th><th>10 phiên</th><th>20 phiên</th></tr></thead><tbody>${pastRows}</tbody></table></div>` : ''}
-      </div>
-    </div>`;
-  drawForecastChart(d, cap);
-}
-
-function drawForecastChart(d, cap) {
-  const el = $('fc-chart');
-  if (FC.chart) { FC.chart.remove(); FC.chart = null; }
-  if (!el || !window.LightweightCharts) return;
-  const LC = window.LightweightCharts;
-  const chart = LC.createChart(el, {
-    autoSize: true,
-    ...CHART_TOUCH,
-    layout: { background: { color: css('--surface') }, textColor: css('--muted'), fontFamily: 'Inter, system-ui, sans-serif' },
-    grid: { vertLines: { color: css('--grid') }, horzLines: { color: css('--grid') } },
-    rightPriceScale: { borderColor: css('--axis') },
-    timeScale: { borderColor: css('--axis') },
-    crosshair: { mode: LC.CrosshairMode.Normal },
-    localization: { locale: 'vi-VN' },
-  });
-  const close = d.close, last = d.date;
-  const line = (color, opts = {}) => chart.addLineSeries({ color, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...opts });
-  const series = [];
-  const add = (name, s, data) => { s.setData(data); series.push([name, s, new Map(data.map((p) => [p.time, p.value]))]); };
-
-  // Quá khứ: giá thật và các lần dự báo cũ (trung vị, dải 5–95%) đặt tại ngày đích
-  add('Giá thật', line(css('--ink'), { lastValueVisible: true }), d.history.map((p) => ({ time: p.time, value: p.close })));
-  const from = d.history[0].time;
-  const pts = d.validation.points.filter((p) => p.date >= from);
-  if (pts.length) {
-    add('Dự báo cũ', line(css('--muted'), { lineStyle: LC.LineStyle.Dashed, lineWidth: 1 }), pts.map((p) => ({ time: p.date, value: p.p50 })));
-    add('Dự báo cũ 95%', line(withAlpha(css('--muted'), 0.45), { lineStyle: LC.LineStyle.Dotted, lineWidth: 1 }), pts.map((p) => ({ time: p.date, value: p.p95 })));
-    add('Dự báo cũ 5%', line(withAlpha(css('--muted'), 0.45), { lineStyle: LC.LineStyle.Dotted, lineWidth: 1 }), pts.map((p) => ({ time: p.date, value: p.p05 })));
-  }
-
-  // Tương lai: dải thống kê
-  const startPt = { time: last, value: close };
-  const s3 = css('--s3') || '#a855f7';
-  for (const [k, name, alpha, width] of [['p95', 'Thống kê 95%', 0.5, 1], ['p75', 'Thống kê 75%', 0.8, 1], ['p50', 'Thống kê trung vị', 1, 2], ['p25', 'Thống kê 25%', 0.8, 1], ['p05', 'Thống kê 5%', 0.5, 1]]) {
-    add(name, line(withAlpha(s3, alpha), { lineWidth: width, lineStyle: k === 'p50' ? LC.LineStyle.Solid : LC.LineStyle.Dashed }), [startPt, ...d.cone.map((c) => ({ time: c.date, value: c[k] }))]);
-  }
-  // Tương lai: 3 kịch bản AI (5 / 10 / 20 phiên, không vượt quá số phiên đang xem)
-  if (d.ai) {
-    for (const s of d.ai.scenarios) {
-      const data = [startPt];
-      for (const h of [5, 10, 20]) {
-        const c = d.cone.find((x) => x.h === h);
-        if (c) data.push({ time: c.date, value: s[`p${h}`] });
-      }
-      if (data.length > 1) add(`AI ${s.label} (${s.probability}%)`, line(css(SCN_COLOR[s.name]), { lineWidth: s.name === 'CO_SO' ? 3 : 2 }), data);
-    }
-  }
-  series[0][1].createPriceLine({ price: close, color: css('--muted'), lineWidth: 1, lineStyle: LC.LineStyle.Dotted, axisLabelVisible: true, title: 'Hôm nay' });
-  series[0][1].setMarkers([{ time: last, position: 'aboveBar', color: css('--accent'), shape: 'arrowDown', text: 'Hôm nay' }]);
-
-  const legend = $('fc-legend');
-  const show = (time) => {
-    if (!time) { legend.innerHTML = '<span class="muted small">Rê chuột lên biểu đồ để xem giá, % và lời/lỗ theo vốn tại từng ngày.</span>'; return; }
-    const parts = series.map(([name, , m]) => {
-      const v = m.get(time);
-      if (v == null) return '';
-      const r = fcPnl(cap, close, v);
-      const future = time > last;
-      return `<span>${esc(name)} <b>${fmt(v)}</b> <span class="${dirClass(v - close)}">${signed((v / close - 1) * 100, 1)}%</span>${future && r.shares ? ` <span class="${dirClass(r.pnl)}">(${fmtBig(Math.round(r.pnl))})</span>` : ''}</span>`;
-    }).filter(Boolean);
-    legend.innerHTML = `<b>${time}${time > last ? ' · tương lai' : ''}</b> · ${parts.join(' · ')}`;
-  };
-  chart.subscribeCrosshairMove((p) => show(p.time));
-  show(null);
-  chart.timeScale().fitContent();
-  FC.chart = chart;
-}
-
-$('fc-h')?.addEventListener('click', (e) => {
-  const b = e.target.closest('button[data-h]');
-  if (!b || !state.current) return;
-  FC.h = Number(b.dataset.h);
-  loadForecast(state.current);
-});
-$('fc-capital')?.addEventListener('change', (e) => {
-  try { localStorage.setItem('vnstock_capital', String(Math.max(0, Number(e.target.value) || 0))); } catch { /* bỏ qua */ }
-  if (state.current && FC.data) { renderForecast(state.current, FC.data); renderBrief(state.current); }
-});
-$('fc-ai')?.addEventListener('click', () => {
-  if (!state.current) return;
-  runAiFor(state.current, true);
-  $('fc-body').querySelector('.fc-summary')?.insertAdjacentHTML('beforeend', '<div class="ref"><span class="mini-spin"></span> AI đang phân tích lại (Gemini → hội đồng), dự báo sẽ tự cập nhật khi xong…</div>');
-});
 
 // ---------- Hội đồng đầu tư ----------
 const CM = { timer: null };
@@ -2622,7 +2131,7 @@ function renderCommittee(s, a) {
     state.cmResult = s.result;
     if (s.result.gemini) renderAi(s.result.gemini);
     applyAiToDecision(a, s.result.gemini || state.aiResult);
-    if (wasRunning) { loadWatchlist(); loadForecast(a); }
+    if (wasRunning) loadWatchlist();
   } else if (wasRunning) applyAiToDecision(a, state.aiResult);
   const err = s?.status === 'error' ? `<p class="error" style="padding:10px 0">Lần họp gần nhất lỗi: ${esc(s.error)}</p>` : '';
   const r = s?.result;
@@ -2632,24 +2141,14 @@ function renderCommittee(s, a) {
   }
   const v = r.verdict;
   const [wTone, wLabel] = WINNER[v.winner] || WINNER.CAN_BANG;
+  setFold('sec-committee', `${v.decisionLabel} · ${wLabel.toLowerCase()}`, DECISION_TONE[v.decision] || '');
   const close = a.price.close;
   const stale = r.price !== close;
   const ptsList = (items, cls) => `<ul class="cm-points">${items.map((p) => `<li><span class="cm-lv ${p.level === 'CAO' ? cls : ''}">${p.level === 'CAO' ? 'Mạnh' : 'Vừa'}</span>${esc(p.text)}</li>`).join('')}</ul>`;
   const list = (title, items, cls = '') => (items?.length ? `<div><h4 class="${cls}">${title}</h4><ul>${items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '');
-  const pctFrom = (x) => ` <span class="muted small">${signed(((x - close) / close) * 100, 1)}%</span>`;
-  const levels = [
-    v.entryZone && ['Vùng mua', `${fmt(v.entryZone.from)} – ${fmt(v.entryZone.to)}`, ''],
-    v.stopLoss != null && ['Cắt lỗ', fmt(v.stopLoss) + pctFrom(v.stopLoss), 'down'],
-    ...v.targets.map((t, i) => [`Mục tiêu ${i + 1}`, fmt(t) + pctFrom(t), 'up']),
-    r.bull.targetPrice != null && ['Mục tiêu phe mua', fmt(r.bull.targetPrice) + pctFrom(r.bull.targetPrice), 'up'],
-    r.bear.downsidePrice != null && ['Rủi ro phe bán', fmt(r.bear.downsidePrice) + pctFrom(r.bear.downsidePrice), 'down'],
-    ['Khung thời gian', esc(v.horizon), ''],
-  ].filter(Boolean);
-
   $('cm-body').innerHTML = `${err}
     <div class="ai-head">
       <span class="recommendation-badge ${v.decision}">${esc(v.decisionLabel)}</span>
-      <span>Độ tin cậy <b>${v.confidence}%</b></span>
       <span class="tag ${wTone}">${wLabel}</span>
       <span class="muted small">${esc(r.model)} · ${new Date(r.createdAt).toLocaleString('vi-VN')} · tại giá ${fmt(r.price)}${stale ? ' (giá đã đổi, nên họp lại)' : ''} · điểm hệ thống ${signed(r.ruleScore.total, 0)} (${esc(r.ruleScore.label)})</span>
     </div>
@@ -2682,16 +2181,15 @@ function renderCommittee(s, a) {
       <div class="ai-box"><h4>Hành động</h4>${esc(v.action)}</div>
       <div class="ai-box"><h4>Tỷ trọng & giải ngân</h4>${esc(v.positionSizing)}</div>
     </div>
-    <div class="ai-levels">${levels.map(([k, val, cls]) => `<div class="fund-item"><div class="k">${k}</div><div class="v ${cls}">${val}</div></div>`).join('')}</div>
     <div class="ai-lists">${list('Điều kiện để đổi quyết định', v.conditionsToChange)}</div>
-    <p class="ai-note">3 lượt gọi Gemini · ${r.tokens ? `${r.tokens.toLocaleString('vi-VN')} tokens · ` : ''}${Math.round(r.durationMs / 1000)}s. AI có thể sai; hãy đối chiếu với dữ liệu định lượng.</p>`;
+    <p class="ai-note">3 lượt gọi Gemini · ${r.tokens ? `${r.tokens.toLocaleString('vi-VN')} tokens · ` : ''}${Math.round(r.durationMs / 1000)}s. AI chỉ dùng để soát rủi ro: trong đo kiểm, lệnh mua của AI chưa thắng rổ, độ tin cậy AI tự chấm chưa khớp thực tế nên đã ẩn.</p>`;
 }
 
 $('cm-btn')?.addEventListener('click', () => state.current && runAiFor(state.current, false));
 
 // ---------- Danh mục đầu tư ----------
 function showPortfolio() {
-  ['empty', 'error', 'report', 'loading', 'picks', 'rankview', 'sectorview', 'autoview'].forEach((id) => ($(id).hidden = true));
+  ['marketview', 'empty', 'error', 'report', 'loading', 'picks', 'rankview', 'sectorview', 'autoview'].forEach((id) => ($(id).hidden = true));
   $('auto-btn')?.classList.remove('on');
   markMobileView('analyze', 'more');
   $('sector-btn')?.classList.remove('on');
@@ -2711,6 +2209,41 @@ async function loadPortfolio() {
     renderPortfolio(await api('/api/portfolio'));
   } catch (err) {
     $('pf-body').innerHTML = `<div class="card error">${esc(err.message)}</div>`;
+    return;
+  }
+  loadHoldingAdvice();
+}
+
+// Phân tích rủi ro từng mã đang nắm: cùng cách tính với bản tin Telegram 15:10 (bán / xem lại / giữ / mua thêm + rủi ro)
+const ADVICE_TONE = { 'BÁN': 'down', 'XEM LẠI': 'down', 'MUA THÊM': 'up', 'GIỮ': 'ref' };
+function adviceRow(x) {
+  return `
+      <div class="pk-none" style="padding:12px 0;border-top:1px solid var(--border)">
+        <div style="display:flex;flex-wrap:wrap;gap:6px 12px;align-items:baseline">
+          <a href="#${esc(x.symbol)}" class="pf-sym" data-sym="${esc(x.symbol)}"><b>${esc(x.symbol)}</b></a>
+          <span class="num">${fmt(x.close)}</span>
+          ${x.qty ? `<span class="muted small">${fmt(x.qty, 0)} cp · vốn ${fmt(x.avgCost)}</span>` : ''}
+          ${x.pnlPct != null ? `<span class="${dirClass(x.pnlPct)}">${x.pnlPct >= 0 ? 'lãi' : 'lỗ'} ${signed(x.pnlPct * 100)}%</span>` : ''}
+          ${x.held != null ? `<span class="muted small">đã giữ ${x.held}/${x.N} phiên</span>` : ''}
+          <span class="st-badge ${ADVICE_TONE[x.action] || ''}" style="margin-left:auto">${esc(x.action)}</span>
+        </div>
+        <div class="small">${esc(x.why)}</div>
+        ${x.risks.length ? `<ul class="pk-none-list">${x.risks.map((r) => `<li class="small">⚠️ ${esc(r)}</li>`).join('')}</ul>` : '<div class="muted small">Chưa thấy rủi ro đáng chú ý.</div>'}
+      </div>`;
+}
+
+async function loadHoldingAdvice() {
+  const el = $('pf-advice');
+  if (!el) return;
+  try {
+    const d = await api('/api/portfolio/advice');
+    if (!$('pf-advice')) return; // đã rời trang
+    const rows = d.items.map(adviceRow).join('');
+    el.innerHTML = `<div class="card-head"><div><h3>🔎 Phân tích rủi ro mã đang nắm</h3>
+      <div class="muted small">Cùng cách tính với bản tin Telegram 15:10${d.breadth != null ? ` · độ rộng thị trường ${Math.round(d.breadth * 100)}% mã trên MA50${d.breadth < 0.5 ? ' (yếu: không mua thêm)' : ''}` : ''} · ${new Date(d.updatedAt).toLocaleTimeString('vi-VN')}</div></div></div>
+      ${rows || '<p class="muted small">Chưa nắm giữ mã nào.</p>'}`;
+  } catch (err) {
+    if ($('pf-advice')) $('pf-advice').innerHTML = `<p class="down small">Không phân tích được: ${esc(err.message)}</p>`;
   }
 }
 
@@ -2801,6 +2334,7 @@ function renderPortfolio(p) {
     ${renderCapitalOverview(p)}
     ${renderPortfolioHeat(p)}
     <section class="card"><div class="card-head"><h3>📊 Vị thế đang nắm giữ</h3></div>${holdings}</section>
+    ${p.holdings.length ? '<section class="card" id="pf-advice"><div class="card-head"><div><h3>🔎 Phân tích rủi ro mã đang nắm</h3><div class="muted small">Đang phân tích từng mã…</div></div></div></section>' : ''}
     ${riskCard}${behaviorCard}${txs}${cashCard}`;
 }
 
@@ -2879,7 +2413,6 @@ $('pf-body')?.addEventListener('click', async (e) => {
   }
 });
 
-initBacktest();
 
 // ---------- Kiểm tra các API key AI ----------
 $('btn-ai-check')?.addEventListener('click', async () => {
@@ -2935,7 +2468,7 @@ $('rank-card')?.addEventListener('click', (e) => {
 });
 
 function showRankView() {
-  ['empty', 'error', 'report', 'loading', 'picks', 'portfolio', 'sectorview', 'autoview'].forEach((id) => ($(id).hidden = true));
+  ['marketview', 'empty', 'error', 'report', 'loading', 'picks', 'portfolio', 'sectorview', 'autoview'].forEach((id) => ($(id).hidden = true));
   $('auto-btn')?.classList.remove('on');
   markMobileView('analyze', 'more');
   $('sector-btn')?.classList.remove('on');
@@ -3597,6 +3130,90 @@ $('rank-btn')?.addEventListener('click', showRankView);
 
 // ---------- Tóm tắt nhanh mỗi mã ----------
 const BRIEF_ICON = { up: '▲', down: '▼', ref: '•' };
+const DECISION_TONE = { BUY: 'up', ACCUMULATE: 'up', HOLD: 'ref', AVOID: 'down', SELL: 'down', MUA: 'up', MUA_THAM_DO: 'up', GIU: 'ref', DUNG_NGOAI: 'down', BAN_BOT: 'down', BAN: 'down' };
+
+// ---------- Mục chi tiết gập lại: mỗi mục một dòng tóm tắt ----------
+function setFold(id, text, tone = '') {
+  const el = $(`${id}-sum`);
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = `fold-sum ${tone}`;
+}
+// Ẩn mục không có nội dung (ví dụ VN-Index không có BCTC, khối ngoại…)
+function syncFolds() {
+  document.querySelectorAll('#folds > details.fold').forEach((d) => {
+    const cards = [...d.querySelectorAll(':scope > .fold-body > .card, :scope > .fold-body > section')];
+    d.hidden = cards.length > 0 && cards.every((c) => c.hidden);
+  });
+}
+const short = (t, n = 90) => {
+  const x = String(t || '').replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
+  return x.length > n ? `${x.slice(0, n - 1).trimEnd()}…` : x;
+};
+
+/** Thẻ quyết định: kết luận, một câu nên làm gì, 4 con số và tối đa 3 lý do. */
+function renderQuick(a) {
+  const b = a.brief, eff = b ? effectiveBrief(a) : null;
+  const tone = eff?.tone || (a.recommendation.code === 'BUY' || a.recommendation.code === 'ACCUMULATE' ? 'up' : a.recommendation.code === 'HOLD' ? 'ref' : 'down');
+  const verdict = eff?.verdict || a.recommendation.label;
+  $('qc-verdict').className = `qc-verdict ${tone}`;
+  $('qc-verdict').textContent = `${BRIEF_ICON[tone]} ${verdict}`;
+  $('qc-action').textContent = short(eff?.action || a.recommendation.desc, 160);
+
+  const l = b?.levels || {}, close = a.price.close;
+  const code = eff?.fin?.code ?? b?.code ?? a.recommendation.code;
+  const buying = code === 'BUY' || code === 'ACCUMULATE';
+  const entry = l.buyFrom != null ? { from: l.buyFrom, to: l.buyTo } : a.plan?.entryZone;
+  const stop = l.holdStop ?? l.stop ?? a.plan?.hold?.warnStop;
+  const wait = eff?.steps?.fresh?.find((x) => x.side === 'wait')?.condition;
+  const br = a.marketRegime?.breadth?.pctAboveMa50;
+  const r = a.ranking;
+  const tile = (k, v, sub, cls = '') => `<div class="qc-tile ${cls}"><span class="k">${k}</span><b class="v">${v}</b><span class="s">${sub}</span></div>`;
+  $('qc-tiles').innerHTML = [
+    !a.isIndex && (buying
+      ? tile('Vùng mua', entry ? (entry.from === entry.to ? fmt(entry.to) : `${fmt(entry.from)} – ${fmt(entry.to)}`) : '–', entry && close >= entry.from && close <= entry.to ? 'Giá đang trong vùng' : 'Chờ giá về vùng', 'up')
+      : tile('Mua mới', 'Chưa nên', esc(short(wait, 48) || 'Chưa đủ điều kiện'), 'ref')),
+    !a.isIndex && stop && tile('Ngưỡng thoát', fmt(stop), `${signed((stop / close - 1) * 100, 1)}% · đóng cửa dưới thì bán`, 'down'),
+    r && tile('Điểm xếp hạng', `${r.score}/100`, `hạng ${r.position}/${r.universe} toàn sàn`, r.score >= 70 ? 'up' : r.score < 40 ? 'down' : ''),
+    br != null && tile('Thị trường', `${Math.round(br)}% mã khỏe`, br < 50 ? 'Yếu: không mua mới' : 'Đủ mạnh để mua', br < 50 ? 'down' : 'up'),
+  ].filter(Boolean).join('');
+
+  // Lý do: ưu tiên các yếu tố đã kiểm định, xấu trước nếu kết luận xấu
+  const bad = [], good = [];
+  if (r?.avoid) bad.push('Thuộc 10% mã điểm thấp nhất sàn');
+  if (a.stockRisk?.isRisky) bad.push(`Đang rơi mạnh: ${a.stockRisk.reasons[0]}`);
+  for (const w of a.buyWarnings || []) bad.push(`${w.name}: ${w.text}`);
+  if (r?.aboveMa200 === false) bad.push('Giá dưới MA200: xu hướng dài hạn xấu');
+  if (a.foreign?.net5 != null && a.foreign.net5 < -50e9) bad.push(`Khối ngoại bán ròng ${fmt(-a.foreign.net5 / 1e9, 0)} tỷ trong 5 phiên`);
+  if (r?.trendPick) good.push('Xu hướng chuẩn: gần đỉnh 52 tuần, biến động êm');
+  if (r && r.score >= 70 && r.aboveMa200 !== false) good.push(`Thuộc nhóm dẫn đầu sàn (điểm ${r.score})`);
+  if (r?.aboveMa200 === true) good.push('Giá trên MA200: xu hướng dài hạn tốt');
+  for (const [k, label] of RANK_PART_LABEL) if ((r?.parts?.[k] ?? 0) >= 80) good.push(`${label} mạnh`);
+  const first = tone === 'up' ? good : bad, second = tone === 'up' ? bad : good;
+  const why = [...first.map((t) => [tone === 'up' ? 'up' : 'down', t]), ...second.map((t) => [tone === 'up' ? 'down' : 'up', t])].slice(0, 3);
+  $('qc-why').innerHTML = why.map(([t, x]) => `<li class="${t}"><span aria-hidden="true">${t === 'up' ? '▲' : '▼'}</span>${esc(short(x))}</li>`).join('');
+  $('qc-why').hidden = !why.length;
+
+  setFold('sec-plan', short(eff?.action, 70));
+  syncFolds();
+}
+
+$('qc-alert-btn')?.addEventListener('click', () => {
+  const d = $('sec-alerts');
+  d.open = true;
+  d.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+$('folds-toggle')?.addEventListener('click', (e) => {
+  const all = [...document.querySelectorAll('#folds > details.fold:not([hidden])')];
+  const open = !all.every((d) => d.open);
+  all.forEach((d) => { d.open = open; });
+  e.target.textContent = open ? 'Gập tất cả' : 'Mở tất cả';
+});
+// Mở mục có biểu đồ: canh lại kích thước biểu đồ
+document.querySelectorAll('#folds > details.fold').forEach((d) => d.addEventListener('toggle', () => {
+  if (!d.open || !state.current) return;
+  if (d.id === 'sec-foreign') renderForeignChart(state.current);
+}));
 
 function briefText(a) {
   const b = { ...a.brief, ...(() => { const e = effectiveBrief(a); return { verdict: e.verdict, action: e.action, steps: e.steps, fin: e.fin }; })() }, l = b.levels;
@@ -3900,6 +3517,7 @@ function renderBrief(a) {
   const el = $('brief-card');
   const b = a.brief;
   el.hidden = !b;
+  if (state.current?.symbol === a.symbol) renderQuick(a);
   if (!b) return;
   const eff = effectiveBrief(a);
   const l = b.levels, st = eff.steps;
@@ -3971,8 +3589,8 @@ function renderBrief(a) {
     ${st ? capitalBox(a, st) : ''}
 
     <!-- 4. THẺ MỞ RỘNG CHI TIẾT (ẨN MẶC ĐỊNH CHO AI MUỐN SOI SÂU) -->
-    <details class="bf-deep-details">
-      <summary class="bf-deep-toggle">🔬 Xem chi tiết Thẩm định AI, Bậc thang giá &amp; Rủi ro chuyên sâu ▾</summary>
+    <details class="bf-deep-details" open>
+      <summary class="bf-deep-toggle">🔬 Thẩm định AI, bậc thang giá &amp; rủi ro chuyên sâu</summary>
       <div class="bf-deep-content">
         ${aiReviewBlock(a, eff)}
         ${mcAndRiskBlock(a)}
@@ -4127,6 +3745,7 @@ function renderFlow(a) {
   const fa = ai?.flowAnalysis;
   const aiRead = new Map((fa?.sessionReads || []).map((x) => [x.date, x]));
   const [ruleLabel, ruleTone] = RULE_PHASE[f.phase];
+  setFold('sec-flow', fa ? `${fa.phaseLabel} (AI)` : ruleLabel, fa ? FLOW_TONE[fa.phase] : ruleTone);
   const verdict = fa
     ? `<span class="flow-verdict ${FLOW_TONE[fa.phase]}">${esc(fa.phaseLabel)}</span><span class="muted small">AI · rõ ràng ${fa.strength}/100</span>`
     : `<span class="flow-verdict ref">${state.aiRunning === a.symbol ? '<span class="mini-spin"></span> AI đang đọc phe mua/bán…' : 'AI chưa phân tích'}</span>`;
@@ -4176,7 +3795,7 @@ const SC = { period: 1, sort: 'net', data: null, open: new Set() };
 const tỷ = (v) => (v == null ? '–' : `${signed(v / 1e9, Math.abs(v) >= 1e11 ? 0 : 1)} tỷ`);
 
 function showSectors() {
-  ['empty', 'error', 'report', 'loading', 'picks', 'portfolio', 'rankview', 'autoview'].forEach((id) => ($(id).hidden = true));
+  ['marketview', 'empty', 'error', 'report', 'loading', 'picks', 'portfolio', 'rankview', 'autoview'].forEach((id) => ($(id).hidden = true));
   $('auto-btn')?.classList.remove('on');
   markMobileView('analyze', 'more');
   ['picks-btn', 'pf-btn', 'rank-btn'].forEach((id) => $(id)?.classList.remove('on'));
@@ -4377,7 +3996,7 @@ api('/api/ai/status').catch(() => ({ enabled: false })).then((s) => {
   if (initial === 'theo-doi' || initial === 'watchlist') {
     setMobileTab('watchlist');
   } else if (initial === 'thi-truong' || initial === 'market') {
-    setMobileTab('market');
+    showMarket();
   } else if (initial === 'tiem-nang' || initial === 'picks') {
     setMobileTab('picks');
     showPicks();
@@ -4389,10 +4008,10 @@ api('/api/ai/status').catch(() => ({ enabled: false })).then((s) => {
     showSectors();
   } else if (initial === 'tu-dau-tu') {
     showAutoTrade();
-  } else if (/^[A-Za-z0-9]{3,8}$/.test(initial) && !['watchlist', 'market', 'picks', 'danh-muc', 'xep-hang', 'nganh', 'tu-dau-tu'].includes(initial)) {
+  } else if (/^[A-Za-z0-9]{3,8}$/.test(initial) && !['watchlist', 'market', 'picks', 'danh-muc', 'xep-hang', 'nganh', 'tu-dau-tu', 'thi-truong'].includes(initial)) {
     analyze(initial.toUpperCase());
   } else {
-    showPicks();
+    showMarket();
   }
 });
 
@@ -4400,7 +4019,9 @@ api('/api/ai/status').catch(() => ({ enabled: false })).then((s) => {
 window.addEventListener('hashchange', () => {
   const h = decodeURIComponent(location.hash.slice(1)).toLowerCase();
   if (!h) return;
-  if (h === 'tiem-nang' || h === 'picks') {
+  if (h === 'thi-truong') {
+    showMarket();
+  } else if (h === 'tiem-nang' || h === 'picks') {
     setMobileTab('picks');
     showPicks();
   } else if (h === 'danh-muc') {
@@ -4416,12 +4037,158 @@ window.addEventListener('hashchange', () => {
   }
 });
 
+// ---------- Thị trường hôm nay: tổng quan đọc trong một phút ----------
+const MK = { chart: null };
+const MK_TONE = { CONFIRMED_UPTREND: 'up', UPTREND_UNDER_PRESSURE: 'ref', MARKET_CORRECTION: 'down', UNKNOWN: 'ref' };
+const MK_TREND = { TANG: ['📈 Tăng', 'up'], TANG_NHE: ['↗ Tăng nhẹ', 'up'], DI_NGANG: ['➡ Đi ngang', 'ref'], GIAM_NHE: ['↘ Giảm nhẹ', 'down'], GIAM: ['📉 Giảm', 'down'] };
+const ty = (v) => `${signed(v / 1e9, 0)} tỷ`;
+
+function showMarket() {
+  ['empty', 'error', 'report', 'loading', 'picks', 'portfolio', 'rankview', 'sectorview', 'autoview'].forEach((id) => ($(id).hidden = true));
+  ['picks-btn', 'pf-btn', 'rank-btn', 'sector-btn', 'auto-btn'].forEach((id) => $(id)?.classList.remove('on'));
+  markMobileView('picks', 'market');
+  $('marketview').hidden = false;
+  history.replaceState(null, '', '#thi-truong');
+  loadMarketPage();
+}
+
+async function loadMarketPage() {
+  const body = $('mk-body');
+  if (!body.dataset.loaded) body.innerHTML = '<div class="loading-state" style="border:none;padding:40px"><span>Đang tổng hợp thị trường…</span></div>';
+  const [m, reg, mv, sec, out, scr, chart] = await Promise.all([
+    api('/api/market').catch(() => null), api('/api/market-regime').catch(() => null), api('/api/movers').catch(() => null),
+    api('/api/sectors?period=1').catch(() => null), api('/api/outlook').catch(() => null), api('/api/screener').catch(() => null),
+    api('/api/chart/VNINDEX?tf=D').catch(() => null),
+  ]);
+  if ($('marketview').hidden) return;
+  body.dataset.loaded = '1';
+  renderMarketPage({ m, reg, mv, sec, out, ai: scr?.result?.ai && !scr.result.ai.error ? scr.result.ai : null, aiDate: scr?.result?.date, chart });
+}
+
+function renderMarketPage({ m, reg, mv, sec, out, ai, aiDate, chart }) {
+  const br = reg?.breadth?.pctAboveMa50;
+  const tone = MK_TONE[reg?.regime] || 'ref';
+  const buyOk = reg?.allowNewBuys && (br == null || br >= 50);
+  const date = (m?.date || mv?.date || '').split('-').reverse().join('/');
+  $('mk-sub').textContent = date ? `Phiên ${date} · HOSE` : '';
+
+  // Lý do: tối đa 4 dòng, mỗi dòng một sự thật đo được
+  const why = [];
+  if (reg) {
+    const pos = [reg.aboveMa50 ? 'trên' : 'dưới', reg.aboveMa200 ? 'trên' : 'dưới'];
+    why.push([reg.aboveMa50 && reg.aboveMa200 ? 'up' : !reg.aboveMa50 && !reg.aboveMa200 ? 'down' : 'ref', `VN-Index ${pos[0]} MA50, ${pos[1]} MA200${reg.from1yHighPct != null ? ` · cách đỉnh 1 năm ${signed(reg.from1yHighPct, 1)}%` : ''}`]);
+    if (reg.distDays != null) why.push([reg.distDays >= 5 ? 'down' : 'up', `${reg.distDays} phiên phân phối (giảm kèm thanh khoản lớn) gần đây${reg.distDays >= 5 ? ': áp lực bán mạnh' : ''}`]);
+  }
+  if (br != null) why.push([br >= 50 ? 'up' : 'down', `${Math.round(br)}% cổ phiếu trên MA50${br < 50 ? ': số mã khỏe ít, luật đã kiểm định là không mua mới' : ''}`]);
+  if (mv?.foreignTotal) why.push([dirClass(mv.foreignTotal.netVal), `Khối ngoại ${mv.foreignTotal.netVal >= 0 ? 'mua' : 'bán'} ròng ${fmt(Math.abs(mv.foreignTotal.netVal) / 1e9, 0)} tỷ trong phiên`]);
+
+  const b = mv?.breadth;
+  const tile = (k, v, s, cls = '') => `<div class="qc-tile ${cls}"><span class="k">${k}</span><b class="v">${v}</b><span class="s">${s}</span></div>`;
+  const list = (title, rows, fmtRow) => `<div class="mk-list"><h4>${title}</h4>${rows?.length ? `<ol>${rows.slice(0, 5).map(fmtRow).join('')}</ol>` : '<p class="muted small">Chưa có số liệu</p>'}</div>`;
+  const symLink = (s) => `<a href="#${esc(s)}" class="pf-sym" data-sym="${esc(s)}"><b>${esc(s)}</b></a>`;
+  const stockRow = (x) => `<li>${symLink(x.symbol)}<span class="num">${fmt(x.close)}</span><span class="num ${dirClass(x.changePct)}">${signed(x.changePct, 1)}%</span></li>`;
+  const flowRow = (x) => `<li>${symLink(x.symbol)}<span></span><span class="num ${dirClass(x.netVal)}">${ty(x.netVal)}</span></li>`;
+  const secs = (sec?.sectors || []).filter((s) => s.net != null);
+  const secIn = [...secs].sort((x, y) => y.net - x.net).filter((s) => s.net > 0);
+  const secOut = [...secs].sort((x, y) => x.net - y.net).filter((s) => s.net < 0);
+  const secRow = (s) => `<li><span class="mk-sec">${esc(s.name)}</span><span class="num ${dirClass(s.ret)}">${signed((s.ret || 0) * 100, 1)}%</span><span class="num ${dirClass(s.net)}">${ty(s.net)}</span></li>`;
+  const o = out?.result, [tLabel, tTone] = MK_TREND[o?.trend] || ['–', 'ref'];
+
+  $('mk-body').innerHTML = `
+    <section class="card quick-card">
+      <div class="qc-verdict-row">
+        <div class="qc-verdict ${tone}">${{ up: '▲', down: '▼', ref: '•' }[tone]} ${esc(reg?.label || 'Chưa xác định')}</div>
+        <p class="qc-action">${buyOk ? `Được mua mới theo xếp hạng. Tỷ trọng cổ phiếu nên ở mức ${esc(reg.exposure)}.` : `Không mua mới. Giữ cổ phiếu ở mức ${esc(reg?.exposure || '0–20%')}, còn lại để tiền mặt; mã đang giữ theo luật giữ / bán.`}</p>
+      </div>
+      <div class="qc-tiles">
+        ${m ? tile('VN-Index', fmt(m.close), `<span class="${dirClass(m.change)}">${signed(m.change, 1)} (${signed(m.changePct)}%)</span> · 20 phiên ${signed(m.return20d, 1)}%`, dirClass(m.change)) : ''}
+        ${br != null ? tile('Mã khỏe (trên MA50)', `${Math.round(br)}%`, br >= 50 ? 'Đủ rộng để mua' : 'Dưới 50%: yếu', br >= 50 ? 'up' : 'down') : ''}
+        ${b ? tile('Tăng / giảm', `<span class="up">${b.advancers}</span> / <span class="down">${b.decliners}</span>`, `${b.unchanged} mã đứng giá`, b.advancers >= b.decliners ? 'up' : 'down') : ''}
+        ${mv?.foreignTotal ? tile('Khối ngoại', ty(mv.foreignTotal.netVal), `mua ${fmt(mv.foreignTotal.buyVal / 1e9, 0)} · bán ${fmt(mv.foreignTotal.sellVal / 1e9, 0)} tỷ`, dirClass(mv.foreignTotal.netVal)) : ''}
+        ${b?.totalValue ? tile('Giá trị khớp', `${fmt(b.totalValue / 1e9, 0)} tỷ`, 'toàn sàn HOSE') : ''}
+      </div>
+      ${why.length ? `<ul class="qc-why">${why.map(([t, x]) => `<li class="${t === 'up' ? 'up' : t === 'down' ? 'down' : ''}"><span aria-hidden="true">${t === 'up' ? '▲' : t === 'down' ? '▼' : '•'}</span>${esc(x)}</li>`).join('')}</ul>` : ''}
+    </section>
+
+    <div class="mk-grid">
+      <section class="card mk-chart-card">
+        <div class="card-head"><div><h3>VN-Index 1 năm</h3><div class="muted small">Đường giá đóng cửa, MA50 và MA200</div></div></div>
+        <div id="mk-chart" class="mk-chart"></div>
+      </section>
+      <section class="card mk-ai">
+        <div class="card-head"><div><h3>✦ Nhận định của AI</h3><div class="muted small">${o ? `Tuần ${out.week.monday.split('-').reverse().join('/')} – ${out.week.friday.split('-').reverse().join('/')}` : ''}</div></div>
+          ${o ? `<span class="st-badge ${tTone}">${tLabel}</span>` : ''}</div>
+        ${o ? `<p class="mk-ai-text">${esc(o.summary)}</p>
+          <div class="mk-ai-line"><span class="muted">Biên độ dự kiến</span><b>${fmt(o.low, 0)} – ${fmt(o.high, 0)}</b></div>
+          ${o.strategy ? `<div class="mk-ai-line"><span class="muted">Chiến lược</span><span>${esc(o.strategy)}</span></div>` : ''}` : '<p class="muted small">Chưa có nhận định tuần (tạo sau phiên chiều thứ 6).</p>'}
+        ${ai?.marketView ? `<div class="mk-ai-day"><b>Hôm nay${aiDate ? ` (${aiDate.split('-').reverse().join('/')})` : ''}:</b> ${esc(ai.marketView)}</div>` : ''}
+      </section>
+    </div>
+
+    <section class="card">
+      <div class="card-head"><div><h3>Dòng tiền ngành hôm nay</h3><div class="muted small">Ước tính từ giá trị khớp phiên tăng / giảm · bấm Ngành để xem chi tiết</div></div></div>
+      <div class="mk-lists two">
+        ${list('🟢 Hút tiền mạnh nhất', secIn, secRow)}
+        ${list('🔴 Bị bán mạnh nhất', secOut, secRow)}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div><h3>Cổ phiếu nổi bật</h3><div class="muted small">HOSE, giá trị khớp ≥ 5 tỷ · bấm mã để phân tích</div></div></div>
+      <div class="mk-lists">
+        ${list('Tăng mạnh', mv?.gainers, stockRow)}
+        ${list('Giảm mạnh', mv?.losers, stockRow)}
+        ${list('Khối ngoại mua ròng', mv?.foreignBuy, flowRow)}
+        ${list('Khối ngoại bán ròng', mv?.foreignSell, flowRow)}
+      </div>
+    </section>`;
+  drawMarketChart(chart);
+}
+
+function drawMarketChart(data) {
+  const el = $('mk-chart');
+  if (MK.chart) { MK.chart.remove(); MK.chart = null; }
+  if (!el || !data?.bars?.length || !window.LightweightCharts) return;
+  const LC = window.LightweightCharts;
+  const from = data.bars.at(-250)?.time || data.bars[0].time;
+  const cut = (pts) => pts.filter((p) => p.time >= from);
+  const chart = LC.createChart(el, {
+    autoSize: true, ...CHART_TOUCH,
+    layout: { background: { color: css('--surface') }, textColor: css('--muted'), fontFamily: 'Inter, system-ui, sans-serif', fontSize: 11 },
+    grid: { vertLines: { visible: false }, horzLines: { color: css('--grid') } },
+    rightPriceScale: { borderVisible: false }, timeScale: { borderVisible: false },
+    localization: { locale: 'vi-VN', priceFormatter: (v) => fmt(v, 0) },
+    handleScale: false, handleScroll: false,
+  });
+  const line = (color, w = 1.5) => chart.addLineSeries({ color, lineWidth: w, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  const last = data.bars.at(-1), first = data.bars.find((b) => b.time >= from);
+  const area = chart.addAreaSeries({
+    lineColor: last.close >= first.close ? css('--up') : css('--down'), lineWidth: 2,
+    topColor: withAlpha(last.close >= first.close ? css('--up') : css('--down'), 0.18), bottomColor: withAlpha(css('--surface'), 0),
+    priceLineVisible: false,
+  });
+  area.setData(cut(data.bars.map((b) => ({ time: b.time, value: b.close }))));
+  line(css('--s2')).setData(cut(data.sma50));
+  line(css('--s3')).setData(cut(data.sma200));
+  chart.timeScale().fitContent();
+  MK.chart = chart;
+}
+
+$('mk-btn')?.addEventListener('click', showMarket);
+$('mk-refresh')?.addEventListener('click', loadMarketPage);
+$('mk-body')?.addEventListener('click', (e) => {
+  const a = e.target.closest('[data-sym]');
+  if (!a) return;
+  e.preventDefault();
+  analyze(a.dataset.sym);
+});
+
 // ---------- Tool tự đầu tư (tài khoản giấy) ----------
 const AT_REASON = { hold_end: 'Hết 40 phiên, không còn là ứng viên', delisted: 'Ngừng giao dịch' };
 const vnd = (v) => (v == null ? '–' : `${Math.round(v).toLocaleString('vi-VN')} đ`);
 
 function showAutoTrade() {
-  ['empty', 'error', 'report', 'loading', 'picks', 'portfolio', 'rankview', 'sectorview'].forEach((id) => ($(id).hidden = true));
+  ['marketview', 'empty', 'error', 'report', 'loading', 'picks', 'portfolio', 'rankview', 'sectorview'].forEach((id) => ($(id).hidden = true));
   ['picks-btn', 'pf-btn', 'rank-btn', 'sector-btn'].forEach((id) => $(id)?.classList.remove('on'));
   markMobileView('analyze', 'more');
   $('auto-btn')?.classList.add('on');
@@ -4435,9 +4202,47 @@ async function loadAutoTrade(action = null) {
   try {
     const d = action ? await api(`/api/autotrade/${action}`, { method: 'POST' }) : await api('/api/autotrade');
     renderAutoTrade(d);
+    loadScorecard();
   } catch (err) {
     $('at-summary').innerHTML = `<p class="down">${esc(err.message)}</p>`;
   }
+}
+
+// ---------- Bảng chấm điểm tuần ----------
+async function loadScorecard() {
+  const el = $('at-score');
+  try {
+    const sc = await api('/api/scorecard');
+    if ($('autoview').hidden) return;
+    el.innerHTML = renderScorecard(sc);
+    el.hidden = false;
+  } catch (err) {
+    el.innerHTML = `<p class="down small">Không tính được bảng chấm điểm: ${esc(err.message)}</p>`;
+    el.hidden = false;
+  }
+}
+
+function renderScorecard(sc) {
+  const p = (v, d = 1) => (v == null ? '–' : `${signed(v * 100, d)}%`);
+  const t = sc.tool;
+  const dm = (s) => s.split('-').reverse().slice(0, 2).join('/');
+  const tile = (k, v, s, cls = '') => `<div class="qc-tile ${cls}"><span class="k">${k}</span><b class="v">${v}</b><span class="s">${s}</span></div>`;
+  const side = (x, buy) => (x.n
+    ? `<b>${x.right}/${x.n}</b> đúng <span class="muted">(${Math.round((x.right / x.n) * 100)}%)</span>${buy && x.avgExcess != null ? ` · TB <span class="${dirClass(x.avgExcess)}">${p(x.avgExcess)}</span> so rổ` : ''}${buy && x.worst.length ? `<div class="muted small">sai nhiều nhất: ${x.worst.map(esc).join(', ')}</div>` : ''}`
+    : '<span class="muted">không có</span>');
+  return `
+    <div class="card-head"><div><h3>🏆 Bảng chấm điểm tuần ${dm(sc.week.from)} – ${dm(sc.week.to)}</h3>
+      <div class="muted small">Thước đo duy nhất không tự lừa được: tool có thắng VN-Index bằng tiền thật (giấy) không, và khuyến nghị đúng bao nhiêu.</div></div></div>
+    <p class="sc-verdict ${t?.week.vs != null ? dirClass(t.week.vs) : ''}">${esc(sc.verdict)}</p>
+    ${t ? `<div class="qc-tiles">
+      ${tile('Tool tuần này', p(t.week.ret), `VN-Index ${p(t.week.index)}`, dirClass(t.week.vs))}
+      ${tile('Từ khi bắt đầu', p(t.total.ret), `VN-Index ${p(t.total.index)} · ${t.sessions} phiên`, dirClass(t.total.vs))}
+      ${tile('Sụt lớn nhất', p(t.maxDrawdown), 'từ đỉnh tài sản', t.maxDrawdown < -0.1 ? 'down' : '')}
+      ${tile('Lệnh trong tuần', `${t.trades.buys} mua · ${t.trades.sells} bán`, t.trades.sells ? `${t.trades.wins} lệnh bán có lãi` : 'chưa có lệnh bán', '')}
+    </div>` : ''}
+    ${sc.calls.length ? `<div class="tbl-wrap" style="margin-top:12px"><table class="tbl"><thead><tr><th>Khuyến nghị đủ ${sc.horizon} phiên trong tuần</th><th>Mua (đúng = hơn rổ)</th><th>Tránh (đúng = kém rổ)</th></tr></thead><tbody>
+      ${sc.calls.map((c) => `<tr><td>${esc(c.label)}</td><td>${side(c.buy, true)}</td><td>${side(c.avoid, false)}</td></tr>`).join('')}
+    </tbody></table></div>` : '<p class="muted small" style="margin-top:10px">Chưa có khuyến nghị nào đủ 5 phiên kết thúc trong tuần này.</p>'}`;
 }
 
 function renderAutoTrade(d) {
@@ -4497,6 +4302,7 @@ function renderAutoTrade(d) {
   const tbl = (head, rows, empty) => (rows ? `<div class="tbl-wrap"><table class="tbl"><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="muted small">${empty}</p>`);
 
   $('at-body').innerHTML = `
+    <div class="two-col">
     <section class="card">
       <div class="card-head"><div><h3>Lệnh cho phiên tới</h3><div class="muted small">Tool đã quyết định sau giờ đóng cửa; sẽ khớp ở giá mở cửa phiên tới. Giá tham chiếu là giá đóng cửa gần nhất.</div></div></div>
       ${d.gate?.breadth != null ? `<p class="small ${d.gate.gated ? 'down' : 'muted'}" style="margin:0 0 10px">Độ rộng thị trường phiên ${d.gate.date.split('-').reverse().join('/')}: <b>${Math.round(d.gate.breadth * 100)}%</b> số mã trên MA50${d.gate.gated ? ` (dưới ${Math.round(d.gate.min * 100)}%) → <b>tạm dừng mua mới</b>, mã đang giữ vẫn theo luật giữ / bán. Kiểm định 3 năm: dừng mua khi thị trường yếu giúp Sharpe 1,16 → 1,27, sụt tối đa −16,8% → −14,4%.` : ` (≥ ${Math.round(d.gate.min * 100)}%): được mua mới.`}</p>` : ''}
@@ -4506,6 +4312,7 @@ function renderAutoTrade(d) {
       <div class="card-head"><div><h3>Cổ phiếu đang nắm giữ</h3><div class="muted small">Lãi/lỗ đã trừ phí bán và thuế. Tool không mua bán liên tục: ra quyết định ${d.rules.step} phiên/lần, mỗi mã giữ ${d.rules.hold} phiên rồi xét lại (còn là ứng viên thì giữ tiếp, không thì bán). Cổ mua phiên T về tài khoản chiều T+2, sớm nhất bán ở phiên T+${d.rules.sellAfter}.</div></div></div>
       ${tbl(['Mã', 'SL', 'Giá vốn', 'Giá hiện tại', 'Giá trị', 'Lãi/lỗ', '%', 'Ngày mua', 'Đã giữ', 'Hạn xét lại'], holdRows, 'Chưa nắm giữ mã nào.')}
     </section>
+    </div>
     ${d.equity.length >= 2 ? `<section class="card"><div class="card-head"><div><h3>Tài sản so với VN-Index</h3><div class="muted small">Cùng mốc 100 tại phiên đầu tiên</div></div></div><div id="at-chart" style="height:260px"></div></section>` : ''}
     <section class="card">
       <div class="card-head"><div><h3>Sổ lệnh đã khớp</h3><div class="muted small">Ghi lại mọi lệnh tool đã mua / bán, không bao giờ sửa.</div></div></div>
@@ -4627,6 +4434,7 @@ function initMobileNav() {
       $('rankview').hidden = true;
       $('portfolio').hidden = true;
       $('autoview').hidden = true;
+      $('marketview').hidden = true;
       $('report').hidden = false;
     } else {
       showPicks();
@@ -4639,8 +4447,8 @@ function initMobileNav() {
   });
 
   $('mb-nav-market')?.addEventListener('click', () => {
-    setMobileTab('market');
-    loadMovers();
+    window.scrollTo({ top: 0 });
+    showMarket();
   });
 
   $('mb-nav-picks')?.addEventListener('click', () => {
@@ -4717,7 +4525,6 @@ function initMobileNav() {
 
 // Khởi tạo điều hướng Mobile, Rules Modal & Bảng Quét Sidebar
 initMobileNav();
-setupHorizonEvents();
 setupRulesModal();
 setupSidebarScanEvents();
 loadStockNames().then(() => loadRankBoard());
