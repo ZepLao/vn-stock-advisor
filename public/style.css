@@ -1545,3 +1545,22 @@ details.fold[open] > summary { border-bottom: 1px solid var(--border); }
 .sc-card { display: flex; flex-direction: column; gap: 10px; }
 .sc-card .card-head { margin-bottom: 0; }
 .sc-verdict { margin: 0; font-size: 15px; font-weight: 600; }
+
+/* Form ghi lệnh / nạp rút / backtest: cùng chiều cao, nhãn thẳng hàng, ô ngày đủ rộng, ô chọn giữ mũi tên */
+.bt-form { align-items: flex-end; gap: 10px 12px; }
+.bt-form label { gap: 6px; }
+.bt-form label > span { font-size: 11.5px; line-height: 16px; color: var(--muted); font-weight: 500; white-space: nowrap; }
+.bt-form input, .bt-form select { height: 38px; min-height: 38px; box-sizing: border-box; font-family: var(--font-sans); font-variant-numeric: tabular-nums; font-size: 13.5px; }
+.bt-form select { background-color: var(--surface); border: 1px solid var(--border-light); padding: 0 30px 0 11px; min-width: 96px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237d8793' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 9px center; background-size: 14px; }
+.bt-form input[type="date"] { width: 148px; }
+.bt-form input[name="symbol"] { width: 88px; text-transform: uppercase; }
+.bt-form input[name="qty"], .bt-form input[name="price"] { width: 110px; }
+.bt-form input[name="amount"] { width: 150px; }
+.bt-form button[type="submit"] { height: 38px; min-height: 38px; padding: 0 16px; white-space: nowrap; }
+.bt-form .grow { flex: 1 1 120px; min-width: 120px; }
+.pf-forms .bt-form input[name="qty"], .pf-forms .bt-form input[name="price"] { width: 96px; }
+@media (max-width: 640px) {
+  .bt-form input[type="date"], .bt-form input[name="symbol"], .bt-form input[name="qty"], .bt-form input[name="price"], .bt-form input[name="amount"] { width: 100%; }
+}
