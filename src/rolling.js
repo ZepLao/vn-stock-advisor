@@ -114,11 +114,34 @@ export function buyFillPrice(bars, i, ex, slippage = DEFAULTS.slippage) {
 }
 
 /**
+ * Tỷ trọng cổ phiếu được phép theo độ rộng (hàm thuần): dưới `gradedLo` = 0, từ `gradedLo` đến `minBreadth` = `gradedFrac`,
+ * từ `minBreadth` = 1. Không đặt gradedLo thì như luật cũ: dưới minBreadth = 0 (không mua mới), còn lại = 1.
+ */
+export function exposureFor(breadth, R) {
+  if (R.minBreadth == null || breadth == null) return 1;
+  if (breadth >= R.minBreadth) return 1;
+  return R.gradedLo != null && breadth >= R.gradedLo ? R.gradedFrac ?? 0.5 : 0;
+}
+
+/** Phần chi phí thêm của lô lẻ (dưới 100 cp) cho một lệnh `shares` cổ phiếu (hàm thuần). */
+export function oddLotCost(shares, cost) {
+  return cost && shares > 0 ? cost * ((shares % LOT) / shares) : 0;
+}
+
+/**
  * Mô phỏng (hàm thuần). `data[s]` = { bars, at, read, ex }. `sectorOf(sym)` → tên ngành.
- * @param {{ start, minValue, initialCash, members?, sectorOf?, slots?, perSector?, step?, hold?, sizing?, stopPct? }} o
+ * Tùy chọn thêm (mặc định giữ đúng luật đang chạy):
+ *  - gateDaily: thị trường yếu ở phiên quyết định thì xét lại độ rộng MỖI phiên, đủ ngưỡng là mua ngay (không chờ 5 phiên);
+ *  - gradedLo / gradedFrac: giảm tỷ trọng theo nấc thay vì "mua hết / không mua" (xem exposureFor);
+ *  - crashBreadth: độ rộng (đo mỗi phiên) dưới ngưỡng này thì bán hết, chờ độ rộng hồi lại ≥ minBreadth mới mua;
+ *  - lot / oddLot: lô giao dịch (1 = cho phép lô lẻ) và chi phí thêm mỗi chiều cho phần lô lẻ;
+ *  - maxExposure: chỉ đầu tư tối đa phần này của tài sản, còn lại giữ tiền mặt dự phòng;
+ *  - reserveDD: được dùng cả phần dự phòng khi VN-Index đang thấp hơn đỉnh 250 phiên ít nhất mức này (mua lúc giảm sâu).
+ * @param {{ start, minValue, initialCash, members?, sectorOf?, slots?, perSector?, step?, hold?, sizing?, stopPct?,
+ *   gateDaily?, gradedLo?, gradedFrac?, crashBreadth?, lot?, oddLot? }} o
  */
 export function simulateRolling(cal, data, o) {
-  const R = { ...ROLLING_RULES, ...o };
+  const R = { gateDaily: false, gradedLo: null, gradedFrac: 0.5, crashBreadth: null, lot: LOT, oddLot: 0, maxExposure: 1, reserveDD: null, ...ROLLING_RULES, ...o };
   const { start, minValue, initialCash, members = null, sectorOf = () => 'Khác' } = o;
   const { brokerage, sellTax, slippage } = DEFAULTS;
   const syms = Object.keys(data);
@@ -129,9 +152,28 @@ export function simulateRolling(cal, data, o) {
   let pendingSell = new Map(), pendingBuy = [];
   const trades = [], equity = [];
   const blocked = { ceiling: 0, floor: 0 };
-  const stats = { decisions: 0, kept: 0, stopped: 0 };
+  const stats = { decisions: 0, kept: 0, stopped: 0, gated: 0, dailyBuys: 0, crashes: 0 };
+  let waiting = false; // phiên quyết định gần nhất chưa mua đủ vì thị trường yếu
+  let crashed = false; // đã bán hết vì thị trường sập, chờ hồi
+
+  // Độ rộng của rổ tại một phiên (chỉ cần MA50, rẻ hơn tính đủ yếu tố). Rổ theo thời điểm chỉ có ở phiên quyết định,
+  // nên phiên giữa kỳ dùng rổ của phiên quyết định gần nhất (`snapDate`).
+  const breadthAt = (date, snapDate = date) => {
+    const inUni = members ? members(snapDate) : null;
+    let up = 0, n = 0;
+    for (const s of syms) {
+      if (members && !inUni?.has(s)) continue;
+      const d = data[s], i = d.at.get(date);
+      if (i == null || avgTradedValue(d.bars, 20, i) < minValue) continue;
+      const a = aboveMa50(d.bars, i);
+      if (a == null) continue;
+      n++; if (a) up++;
+    }
+    return n ? up / n : null;
+  };
 
   const sell = (s, p, price, t, date, reason) => {
+    price *= 1 - oddLotCost(p.shares, R.oddLot);
     const gross = p.shares * price * 1000, fee = gross * (brokerage + sellTax);
     cash += gross - fee; fees += fee;
     trades.push({ symbol: s, entryTime: p.entry, exitTime: date, pnl: Math.round(gross - fee - p.cost), returnPct: round(((gross - fee) / p.cost - 1) * 100, 2), bars: t - p.t0, reason });
@@ -156,10 +198,11 @@ export function simulateRolling(cal, data, o) {
     for (const b of pendingBuy) {
       const d = data[b.s], i = d.at.get(date);
       if (i == null || i < 1 || pos.has(b.s)) continue;
-      const price = buyFillPrice(d.bars, i, d.ex, slippage);
+      let price = buyFillPrice(d.bars, i, d.ex, slippage);
       if (price == null) { blocked.ceiling++; continue; }
-      const shares = Math.floor(Math.min(b.budget, cash) / (price * 1000 * (1 + brokerage)) / LOT) * LOT;
+      const shares = Math.floor(Math.min(b.budget, cash) / (price * 1000 * (1 + brokerage) * (1 + R.oddLot)) / R.lot) * R.lot;
       if (shares <= 0) continue;
+      price *= 1 + oddLotCost(shares, R.oddLot);
       const gross = shares * price * 1000, fee = gross * brokerage;
       cash -= gross + fee; fees += fee;
       pos.set(b.s, { shares, cost: gross + fee, t0: t, t, entry: date, price });
@@ -168,7 +211,7 @@ export function simulateRolling(cal, data, o) {
 
     for (const s of syms) { const i = data[s].at.get(date); if (i != null) lastClose[s] = data[s].bars[i].close; }
     const value = cash + [...pos].reduce((a, [s, p]) => a + p.shares * (lastClose[s] ?? p.price) * 1000, 0);
-    equity.push({ time: date, value, index: cal[t].close });
+    equity.push({ time: date, value, index: cal[t].close, cash });
     if (t >= cal.length - 1) continue;
 
     // Cắt lỗ cố định (nếu bật): đánh giá mỗi phiên trên giá đóng cửa
@@ -178,11 +221,36 @@ export function simulateRolling(cal, data, o) {
         if (c != null && !pendingSell.has(s) && c * 1000 * p.shares <= p.cost * (1 - R.stopPct)) { pendingSell.set(s, 'stop'); stats.stopped++; }
       }
     }
-    if ((t - start) % R.step !== 0) continue;
+    const isDecision = (t - start) % R.step === 0;
+    // Thị trường sập (đo mỗi phiên): bán hết, chờ hồi
+    if (R.crashBreadth != null || (R.gateDaily && (waiting || crashed) && !isDecision)) {
+      const br = breadthAt(date, cal[t - ((t - start) % R.step)].time);
+      if (R.crashBreadth != null && br != null && br < R.crashBreadth && !crashed) {
+        crashed = true; stats.crashes++;
+        for (const s of pos.keys()) if (!pendingSell.has(s)) pendingSell.set(s, 'crash');
+      }
+      if (crashed && br != null && br >= R.minBreadth) crashed = false;
+      // Xét hằng ngày: vừa đủ ngưỡng thì ra quyết định mua ngay, không chờ phiên quyết định kế tiếp
+      if (!isDecision && R.gateDaily && waiting && !crashed && br != null && exposureFor(br, R) === 1) {
+        stats.dailyBuys++;
+        decide(t, date, value, { buyOnly: true });
+      }
+    }
+    if (!isDecision) continue;
     stats.decisions++;
+    decide(t, date, value, { buyOnly: false });
+  }
+  return { equity, trades, blocked, fees, stats, positions: [...pos.keys()] };
 
-    // Ứng viên tại phiên t
-    const inUni = members ? members(date) : null;
+  // Quyết định tại phiên t: mã đến hạn (trừ khi chỉ mua), rồi lấp suất trống theo tỷ trọng thị trường cho phép
+  function indexDrawdown(t) {
+    let hi = -Infinity;
+    for (let k = Math.max(0, t - 249); k <= t; k++) hi = Math.max(hi, cal[k].close);
+    return cal[t].close / hi - 1;
+  }
+
+  function decide(t, date, value, { buyOnly }) {
+    const inUni = members ? members(cal[t - ((t - start) % R.step)].time) : null;
     const rows = [];
     for (const s of syms) {
       if (members && !inUni?.has(s)) continue;
@@ -193,16 +261,52 @@ export function simulateRolling(cal, data, o) {
       rows.push({ s, f, vol: vol60(d.bars, i), up: aboveMa50(d.bars, i) });
     }
     const { cands, isCand, medVol } = rollingCandidates(rows);
-    // Mã đến hạn: vẫn là ứng viên thì giữ tiếp (tính lại hạn), không thì bán. Rồi lấp suất trống.
-    const due = rollingPlan({ t, held: pos, pendingSell, cands, isCand, medVol, value, free: 0, sectorOf, R: { ...R, slots: 0 } });
-    for (const s of due.kept) { pos.get(s).t = t; stats.kept++; }
-    for (const s of due.sells) pendingSell.set(s, 'hold_end');
-    // Thị trường yếu (độ rộng dưới ngưỡng): không mua mới phiên này
-    if (R.minBreadth != null && (breadthOf(rows) ?? 1) < R.minBreadth) { stats.gated = (stats.gated || 0) + 1; continue; }
-    const free = cash + [...pendingSell.keys()].reduce((a, s) => a + (pos.get(s)?.shares || 0) * (lastClose[s] || 0) * 1000, 0);
-    pendingBuy = rollingPlan({ t, held: pos, pendingSell, cands, isCand, medVol, value, free, sectorOf, R }).buys;
+    if (!buyOnly) {
+      // Mã đến hạn: vẫn là ứng viên thì giữ tiếp (tính lại hạn), không thì bán. Rồi lấp suất trống.
+      const due = rollingPlan({ t, held: pos, pendingSell, cands, isCand, medVol, value, free: 0, sectorOf, R: { ...R, slots: 0 } });
+      for (const s of due.kept) { pos.get(s).t = t; stats.kept++; }
+      for (const s of due.sells) pendingSell.set(s, 'hold_end');
+    }
+    // Thị trường yếu: không mua mới, hoặc chỉ mua đến một phần tài sản (giảm theo nấc)
+    let frac = crashed ? 0 : exposureFor(breadthOf(rows), R);
+    // Tiền mặt dự phòng: chỉ đầu tư tối đa maxExposure, trừ khi thị trường đã giảm sâu (dùng dự phòng để mua giá rẻ)
+    if (frac > R.maxExposure && !(R.reserveDD != null && indexDrawdown(t) <= -R.reserveDD)) frac = R.maxExposure;
+    waiting = frac < 1;
+    if (frac === 0) { stats.gated++; return; }
+    const selling = [...pendingSell.keys()].reduce((a, s) => a + (pos.get(s)?.shares || 0) * (lastClose[s] || 0) * 1000, 0);
+    const invested = value - cash - selling;
+    const free = Math.min(cash + selling, Math.max(0, value * frac - invested));
+    // Giữ dự phòng: vẫn chia đủ số mã, mỗi suất nhỏ lại theo tỷ trọng tối đa
+    const sizeBase = R.maxExposure < 1 && frac === R.maxExposure ? value * frac : value;
+    pendingBuy = rollingPlan({ t, held: pos, pendingSell, cands, isCand, medVol, value: sizeBase, free, sectorOf, R }).buys;
   }
-  return { equity, trades, blocked, fees, stats, positions: [...pos.keys()] };
+}
+
+/**
+ * Chia vốn thành `n` phần, mỗi phần chạy cùng luật nhưng ra quyết định lệch nhau 1 phiên (phần k bắt đầu ở start + k),
+ * cộng tài sản lại (hàm thuần). Khử may rủi do ngày quyết định rơi vào phiên tốt hay xấu: kết quả gần mức trung bình
+ * của các lịch quyết định thay vì phụ thuộc một lịch. Phần chưa bắt đầu giữ tiền mặt.
+ */
+export function simulateTranched(cal, data, o, n = ROLLING_RULES.step) {
+  const parts = Array.from({ length: n }, (_, k) => simulateRolling(cal, data, { ...o, start: o.start + k, initialCash: o.initialCash / n }));
+  const equity = cal.slice(o.start).map((b, j) => {
+    let value = 0, cash = 0;
+    parts.forEach((p, k) => {
+      const e = j >= k ? p.equity[j - k] : null;
+      value += e ? e.value : o.initialCash / n;
+      cash += e ? e.cash : o.initialCash / n;
+    });
+    return { time: b.time, value, index: b.close, cash };
+  });
+  const stats = {};
+  for (const p of parts) for (const [k, v] of Object.entries(p.stats)) stats[k] = (stats[k] || 0) + v;
+  return {
+    equity, stats, parts,
+    trades: parts.flatMap((p) => p.trades),
+    fees: parts.reduce((a, p) => a + p.fees, 0),
+    blocked: { ceiling: parts.reduce((a, p) => a + p.blocked.ceiling, 0), floor: parts.reduce((a, p) => a + p.blocked.floor, 0) },
+    positions: [...new Set(parts.flatMap((p) => p.positions))],
+  };
 }
 
 /**
@@ -230,7 +334,19 @@ export async function loadRollingData({ years = 3, step = ROLLING_RULES.step } =
   const flows = await getSectorFlows(5).catch(() => null);
   const sec = new Map();
   for (const s of flows?.sectors || []) for (const x of s.stocks) sec.set(x.symbol, s.name);
-  return { cal, data, start, minValue: c.minValue, members: (date) => new Set((pit.byDate.get(date) || []).map((u) => u.symbol)), sectorOf: (s) => sec.get(s) || 'Khác' };
+  // Rổ chỉ chụp ở các mốc lấy mẫu: ngày bất kỳ dùng mốc gần nhất trước đó (để chạy được mọi lịch quyết định, kể cả lệch ngày)
+  const sets = new Map(snapDates.map((d) => [d, new Set((pit.byDate.get(d) || []).map((u) => u.symbol))]));
+  const memo = new Map();
+  const members = (date) => {
+    if (sets.has(date)) return sets.get(date);
+    if (memo.has(date)) return memo.get(date);
+    let k = snapDates.length - 1;
+    while (k > 0 && snapDates[k] > date) k--;
+    const set = snapDates[k] <= date ? sets.get(snapDates[k]) : new Set();
+    memo.set(date, set);
+    return set;
+  };
+  return { cal, data, start, minValue: c.minValue, members, sectorOf: (s) => sec.get(s) || 'Khác' };
 }
 
 /** Chạy trên dữ liệu thật (rổ theo thời điểm). */
