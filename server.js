@@ -17,6 +17,7 @@ import { runLiveBacktest } from './src/livebacktest.js';
 import { runRollingPortfolio } from './src/rolling.js';
 import { evaluatePredictions } from './src/predictions.js';
 import { getScorecard } from './src/scorecard.js';
+import { getBuyList } from './src/buylist.js';
 import { getVerification } from './src/verify.js';
 import { startHistorySchedule, listSnapshots } from './src/history.js';
 import { getSectorFlows } from './src/sectors.js';
@@ -183,6 +184,7 @@ const routes = [
   }],
   ['GET', /^\/api\/predictions$/, async (req, res) => send(res, 200, await evaluatePredictions())],
   ['GET', /^\/api\/scorecard$/, async (req, res) => send(res, 200, await getScorecard())],
+  ['GET', /^\/api\/buylist$/, async (req, res) => send(res, 200, await getBuyList())],
   // Kiểm chứng các giả thuyết chọn trước (IC, nhóm mua, độ phủ dải, AI so với luật) kèm t Newey-West
   ['GET', /^\/api\/verification$/, async (req, res) => send(res, 200, await getVerification())],
   ['GET', /^\/api\/history$/, async (req, res) => send(res, 200, { dates: await listSnapshots() })],

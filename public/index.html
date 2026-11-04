@@ -12,8 +12,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/components.css?v=95">
-  <link rel="stylesheet" href="/style.css?v=95">
+  <link rel="stylesheet" href="/components.css?v=96">
+  <link rel="stylesheet" href="/style.css?v=96">
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -296,41 +296,14 @@
 
       <!-- Cổ phiếu tiềm năng -->
       <div id="picks" class="picks-view" hidden>
-        <section class="card picks-head">
-          <div class="page-head">
-            <div>
-              <h1 class="picks-title">Cổ phiếu tiềm năng</h1>
-              <div id="pk-sub" class="muted small"></div>
-            </div>
-            <div class="picks-actions">
-              <button type="button" class="btn btn-secondary btn-sm" id="pk-ai-btn" title="Chỉ chạy lại bước Gemini trên danh sách hiện tại">✦ Gemini đánh giá lại</button>
-              <button type="button" class="btn btn-primary btn-sm" id="pk-run-btn">↻ Quét lại thị trường</button>
-            </div>
+        <div class="page-head mk-head">
+          <div>
+            <h1 class="picks-title">Cổ phiếu tool sẽ mua</h1>
+            <div id="pk-sub" class="muted small"></div>
           </div>
-          <div id="pk-progress" class="pk-progress" hidden>
-            <div class="pk-progress-label" id="pk-progress-label"></div>
-            <div class="pk-bar"><i id="pk-bar-fill"></i></div>
-          </div>
-          <div id="pk-market" class="pk-market"></div>
-          <details class="pk-method-wrap disclosure">
-            <summary>Tiêu chí chọn lọc</summary>
-            <p class="muted small pk-method">
-              Quét mọi mã <b>sàn HOSE</b> → (1) <b>thanh khoản đều ≥ 5 tỷ/ngày</b>: trung bình 20 phiên ≥ 5 tỷ và ít nhất 16/20 phiên đạt 5 tỷ →
-              (2) <b>cổ ngon</b>: đang có lãi, ROE ≥ 12%, lợi nhuận 4 quý không giảm, P/E ≤ 25, nợ vay/vốn chủ ≤ 1,5 (trừ ngân hàng, chứng khoán, bảo hiểm) →
-              (3) <b>ngành đang được mua</b>: dòng tiền ròng 5 phiên dương hoặc thuộc top 5 ngành hút tiền →
-              (4) <b>xu hướng mạnh</b>: điểm xếp hạng 4 yếu tố ≥ 70 và giá trên MA200 → xếp theo nửa điểm xu hướng + nửa điểm chất lượng →
-              phân tích sâu kèm tin tức, loại mã có tin rủi ro → Gemini đánh giá từng mã. Đây là sàng lọc theo dữ liệu, <b>không phải dự báo chắc chắn</b>;
-              tiêu chí "cổ ngon" dùng số liệu BCTC hiện tại, chưa backtest được vì thiếu dữ liệu tài chính lịch sử.
-            </p>
-          </details>
-        </section>
-        <section id="pk-summary" class="card pk-summary" hidden></section>
-        <div id="pk-list" class="pk-list"></div>
-        <section id="pk-sectors" class="card pk-sectors" hidden></section>
-        <details id="pk-rejected" class="card pk-rejected" hidden>
-          <summary>Đã loại sau khi Gemini đánh giá <span id="pk-rejected-count"></span></summary>
-          <div id="pk-rejected-list"></div>
-        </details>
+          <button type="button" class="btn btn-secondary btn-sm" id="pk-refresh">↻ Cập nhật</button>
+        </div>
+        <div id="bl-body" class="mk-body"></div>
       </div>
 
       <!-- Dòng tiền theo nhóm ngành -->
@@ -839,6 +812,6 @@
     <div class="tooltip-action" id="tt-action">Bấm để phân tích</div>
   </div>
 
-  <script src="/app.js?v=95" type="module"></script>
+  <script src="/app.js?v=96" type="module"></script>
 </body>
 </html>
