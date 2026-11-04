@@ -30,7 +30,7 @@ const START = 260;
 
 test('Tài khoản tự đầu tư đi đúng quy trình cuốn chiếu: khớp từng phiên bằng kết quả mô phỏng 3 năm (lô 100)', () => {
   const data = makeData();
-  const sim = simulateRolling(cal, data, { ...ROLLING_RULES, maxExposure: AUTO_RULES.maxExposure, start: START, minValue: 1e9, initialCash: 1e9, sectorOf });
+  const sim = simulateRolling(cal, data, { ...ROLLING_RULES, maxExposure: AUTO_RULES.maxExposure, step: AUTO_RULES.step, maxNew: AUTO_RULES.maxNew, start: START, minValue: 1e9, initialCash: 1e9, sectorOf });
   const st = newAccount(1e9, day(START - 1));
   for (let t = START; t < N; t++) stepSession(st, { date: day(t), index: cal[t].close, data, universe: null, minValue: 1e9, sectorOf }, { ...AUTO_RULES, lot: 100 });
   const buys = st.orders.filter((o) => o.side === 'BUY').length;
@@ -126,24 +126,43 @@ test('stepSession: độ rộng thị trường dưới 50% thì không mua mớ
   assert.ok(open.pendingBuy.length > 0, 'tắt bộ lọc thì vẫn mua');
 });
 
-test('formatAutoTradeMessage: báo lệnh đã khớp, lệnh phiên tới, tài sản; phiên không giao dịch gửi tin ngắn', () => {
+test('formatAutoTradeMessage (xét 5 phiên/lần): báo lệnh đã khớp, lệnh phiên tới, tài sản; phiên không giao dịch gửi tin ngắn', () => {
+  const R5 = { ...AUTO_RULES, step: 5, maxNew: null };
   const data = makeData();
   const st = newAccount(5_000_000, day(START - 1));
-  stepSession(st, { date: day(START), index: 1000, data, universe: null, minValue: 1e9, sectorOf });
-  const m1 = formatAutoTradeMessage(st, [day(START)]);
+  stepSession(st, { date: day(START), index: 1000, data, universe: null, minValue: 1e9, sectorOf }, R5);
+  const m1 = formatAutoTradeMessage(st, [day(START)], R5);
   assert.match(m1, /LỆNH PHIÊN TỚI/);
   assert.match(m1, /▸ <b>MUA M[A-Z]<\/b> ~\d+ cp · tham chiếu/);
-  stepSession(st, { date: day(START + 1), index: 1010, data, universe: null, minValue: 1e9, sectorOf });
-  const m2 = formatAutoTradeMessage(st, [day(START + 1)]);
+  stepSession(st, { date: day(START + 1), index: 1010, data, universe: null, minValue: 1e9, sectorOf }, R5);
+  const m2 = formatAutoTradeMessage(st, [day(START + 1)], R5);
   assert.match(m2, /ĐÃ KHỚP/);
   assert.match(m2, /▸ <b>MUA M[A-Z]<\/b> \d+ cp × [\d,]+ = [\d.]+ đ/);
   assert.match(m2, /Đang giữ \d+ mã/);
   assert.match(m2, /VN-Index cùng kỳ \+1%/);
-  stepSession(st, { date: day(START + 2), index: 1010, data, universe: null, minValue: 1e9, sectorOf });
-  const quiet = formatAutoTradeMessage(st, [day(START + 2)]);
+  stepSession(st, { date: day(START + 2), index: 1010, data, universe: null, minValue: 1e9, sectorOf }, R5);
+  const quiet = formatAutoTradeMessage(st, [day(START + 2)], R5);
   assert.match(quiet, /Hôm nay không giao dịch: đang giữ vị thế/, 'phiên không giao dịch vẫn gửi tin ngắn');
   assert.match(quiet, /Lần ra quyết định tiếp theo: sau phiên thứ 3 kể từ hôm nay/);
   assert.doesNotMatch(quiet, /ĐÃ KHỚP|LỆNH PHIÊN TỚI/);
+});
+
+test('formatAutoTradeMessage (mua rải dần): xét mỗi phiên, mỗi phiên mua mới tối đa 2 mã, ngày không có lệnh vẫn báo rõ', () => {
+  assert.equal(AUTO_RULES.step, 1);
+  assert.equal(AUTO_RULES.maxNew, 2);
+  const data = makeData();
+  const st = newAccount(5_000_000, day(START - 1));
+  const seen = new Set();
+  for (let t = START; t < START + 15; t++) {
+    stepSession(st, { date: day(t), index: 1000, data, universe: null, minValue: 1e9, sectorOf });
+    assert.ok(st.pendingBuy.length <= 2, 'mỗi phiên tối đa 2 lệnh mua');
+    for (const b of st.pendingBuy) assert.ok(!st.positions[b.s], 'không mua trùng mã đang giữ');
+    const msg = formatAutoTradeMessage(st, [day(t)]);
+    assert.match(msg, /LỆNH PHIÊN TỚI/, 'mỗi phiên đều có quyết định');
+    assert.match(msg, /MUA M[A-Z]|Không có lệnh mới|Tạm dừng mua mới|BÁN M[A-Z]/);
+    Object.keys(st.positions).forEach((s) => seen.add(s));
+  }
+  assert.ok(seen.size >= 4, 'mua rải dần qua nhiều phiên');
 });
 
 test('stepSession: luôn giữ 30% tiền mặt dự phòng, vẫn chia đủ số mã', () => {

@@ -200,3 +200,106 @@ export async function runRobustResearch({ years = 8, log = console.log } = {}) {
   await writeFile(join(dirname(FILE), 'robust_research.json'), JSON.stringify(rep), 'utf8');
   return rep;
 }
+
+// ---------- Ba nâng cấp: `npm run research-quality -- upgrade 8` ----------
+// So với cấu hình tool đang chạy (giữ 30% tiền mặt): (1) tỷ trọng theo biến động VN-Index, (2) thêm yếu tố định giá E/P và
+// B/P vào xếp hạng, (3) mua rải dần mỗi phiên tối đa 2 mã (tổng vẫn 10 mã, không trùng).
+// Quy tắc đặt trước: CHẤP NHẬN khi, tính trên 5 lịch quyết định, Sharpe trung bình cao hơn ở cả hai nửa giai đoạn,
+// Sharpe cao hơn ở ít nhất 4/5 lịch, và sụt tối đa trung bình không tệ hơn quá 1 điểm %.
+export const VALUE_FACTORS = [{ key: 'ey', label: 'Lợi nhuận / giá (E/P)', sign: 1 }, { key: 'bp', label: 'Giá trị sổ sách / giá (B/P)', sign: 1 }];
+export const VALUE_LAG_DAYS = 45; // P/E, P/B của ngày D có thể dùng BCTC chưa công bố: lấy số liệu 45 ngày trước rồi chia giá hiện tại
+
+/**
+ * Đọc E/P và B/P tại phiên i theo thời điểm (hàm thuần): mẫu số lấy từ P/E, P/B của ít nhất `lag` ngày trước (khi BCTC chắc chắn
+ * đã công bố), quy về giá hiện tại. P/E ≤ 0 (lỗ) hoặc thiếu thì null.
+ * @param {{ date: string, value: number }[]} pe @param {{ date: string, value: number }[]} pb  (thứ tự bất kỳ)
+ */
+export function valueReader(bars, pe, pb, lag = VALUE_LAG_DAYS) {
+  const asc = (a) => [...(a || [])].sort((x, y) => x.date.localeCompare(y.date));
+  const P = asc(pe), B = asc(pb);
+  const lastBefore = (arr, d) => { let lo = 0, hi = arr.length - 1, k = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (arr[m].date <= d) { k = m; lo = m + 1; } else hi = m - 1; } return k < 0 ? null : arr[k]; };
+  const priceAt = (d) => { let k = bars.length - 1; while (k >= 0 && bars[k].time > d) k--; return k >= 0 ? bars[k].close : null; };
+  return (i) => {
+    const b = bars[i];
+    if (!b) return { ey: null, bp: null };
+    const cut = new Date(Date.parse(b.time) - lag * 86400_000).toISOString().slice(0, 10);
+    const p = lastBefore(P, cut), q = lastBefore(B, cut);
+    const px = (x) => (x ? priceAt(x.date) : null);
+    const ep = p && p.value > 0 && px(p) ? (1 / p.value) * (px(p) / b.close) : null;
+    const bv = q && q.value > 0 && px(q) ? (1 / q.value) * (px(q) / b.close) : null;
+    return { ey: ep, bp: bv };
+  };
+}
+
+async function loadValuation(symbols, log) {
+  const file = join(dirname(FILE), 'valuation_hist.json');
+  const { readFile } = await import('node:fs/promises');
+  const { fetchJson } = await import('./http.js');
+  const { poolMap } = await import('./ranking.js');
+  let cache = {};
+  try { cache = JSON.parse(await readFile(file, 'utf8')); } catch { /* chưa có */ }
+  const need = symbols.filter((s) => !cache[s]);
+  log(`P/E, P/B lịch sử: có sẵn ${symbols.length - need.length} mã, tải thêm ${need.length} mã…`);
+  const FINFO = 'https://api-finfo.vndirect.com.vn/v4';
+  const get = (s, code) => fetchJson(`${FINFO}/ratios?q=code:${s}~itemCode:${code}&sort=reportDate:desc&size=3000&fields=reportDate,value`)
+    .then((r) => (r.data || []).filter((x) => Number.isFinite(x.value)).map((x) => ({ date: x.reportDate, value: x.value }))).catch(() => []);
+  const got = await poolMap(need, async (s) => ({ pe: await get(s, 51006), pb: await get(s, 51012) }), 6);
+  need.forEach((s, k) => { cache[s] = got[k]; });
+  await writeFile(file, JSON.stringify(cache), 'utf8');
+  return cache;
+}
+
+export function upgradeVerdict(v, base) {
+  const wins = v.runs.filter((m, k) => m.sharpe > base.runs[k].sharpe).length;
+  const ok = v.avg.first > base.avg.first && v.avg.second > base.avg.second && wins >= 4 && v.avg.maxDD >= base.avg.maxDD - 0.01;
+  return { wins, ok };
+}
+
+export function formatUpgradeReport(r) {
+  const L = [`Ba nâng cấp ${r.from} → ${r.to} · so với cấu hình đang chạy (giữ 30% tiền mặt) · trung bình 5 lịch quyết định`, `Độ phủ E/P: ${pc(r.coverage, 0)} số mã-phiên`, ''];
+  for (const [cap, rows] of Object.entries(r.byCapital)) {
+    L.push(`=== Vốn ${Number(cap) / 1e6} triệu ===`);
+    for (const v of rows) L.push(`${v.id} ${v.label.padEnd(44)} năm ${pc(v.avg.annual)} · Sharpe ${fx(v.avg.sharpe)} (${fx(v.avg.first)}/${fx(v.avg.second)}) · sụt TB ${pc(v.avg.maxDD)} · 5 lịch Sharpe ${v.runs.map((m) => fx(m.sharpe)).join(' ')}${v.verdict ? ` · hơn ở ${v.verdict.wins}/5 → ${v.verdict.ok ? 'ĐẠT' : 'không đạt'}` : ''}`);
+    L.push('');
+  }
+  return L.join('\n');
+}
+
+export async function runUpgradeResearch({ years = 8, log = console.log } = {}) {
+  const { FACTORS } = await import('./ranking.js');
+  const d = await loadRollingData({ years, step: ROLLING_RULES.step });
+  const val = await loadValuation(Object.keys(d.data), log);
+  let have = 0, all = 0;
+  for (const [s, x] of Object.entries(d.data)) {
+    const vr = valueReader(x.bars, val[s]?.pe, val[s]?.pb), base = x.read;
+    x.read = (i) => { const f = base(i); return f ? { ...f, ...vr(i) } : null; };
+    for (let i = d.data[s].bars.length - 1; i >= Math.max(0, d.data[s].bars.length - 2000); i -= 50) { all++; if (vr(i).ey != null) have++; }
+  }
+  const live = { maxExposure: 0.7 };
+  const variants = [
+    ['B', 'Đang chạy: giữ 30% tiền mặt', live],
+    ['V1', 'Tỷ trọng theo biến động VN-Index', { ...live, volScale: true }],
+    ['V2', 'Thêm định giá E/P, B/P vào xếp hạng', { ...live, factors: [...FACTORS, ...VALUE_FACTORS] }],
+    ['V3', 'Mua rải dần: mỗi phiên tối đa 2 mã, tổng 10 mã', { ...live, step: 1, maxNew: 2 }],
+  ];
+  const byCapital = {};
+  for (const [cap, lot, odd] of [[1e8, LOT, 0], [5e6, 1, ODD_LOT_COST]]) {
+    const rows = [];
+    for (const [id, label, R] of variants) {
+      log(`Vốn ${cap / 1e6} triệu · ${id} ${label}…`);
+      const runs = [0, 1, 2, 3, 4].map((k) => {
+        const sim = simulateRolling(d.cal, d.data, { ...ROLLING_RULES, ...d, ...R, lot, oddLot: odd, initialCash: cap, start: d.start + k });
+        return evalSeries(sim.equity.map((e) => e.value), cap);
+      });
+      const m = (f) => mean(runs.map(f));
+      rows.push({ id, label, R: { ...R, factors: R.factors?.map((x) => x.key) }, runs: runs.map((x) => ({ sharpe: x.sharpe, annual: x.annual, maxDD: x.maxDD })),
+        avg: { annual: m((x) => x.annual), sharpe: m((x) => x.sharpe), first: m((x) => x.first.sharpe), second: m((x) => x.second.sharpe), maxDD: m((x) => x.maxDD) } });
+    }
+    const B = rows[0];
+    for (const v of rows.slice(1)) v.verdict = upgradeVerdict(v, B);
+    byCapital[cap] = rows;
+  }
+  const rep = { from: d.cal[d.start].time, to: d.cal.at(-1).time, coverage: all ? have / all : 0, byCapital, builtAt: new Date().toISOString() };
+  await writeFile(join(dirname(FILE), 'upgrade_research.json'), JSON.stringify(rep), 'utf8');
+  return rep;
+}
