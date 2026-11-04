@@ -130,3 +130,47 @@ test('simulateRolling: maxExposure giữ tiền mặt dự phòng, mặc định
   assert.ok(cashShare(kept) > cashShare(full) + 0.12, 'mỗi suất nhỏ lại 30%');
   assert.equal(kept.positions.length, full.positions.length, 'vẫn chia đủ số mã');
 });
+
+test('simulateRolling: maxNew mua rải dần, mỗi lần tối đa N mã, không trùng mã', () => {
+  const { cal, data, sectorOf } = fixture();
+  const sim = simulateRolling(cal, data, { start: 260, minValue: 0, initialCash: 1e9, sectorOf, step: 1, maxNew: 2 });
+  const byEntry = {};
+  for (const t of sim.trades) byEntry[t.entryTime] = (byEntry[t.entryTime] || 0) + 1;
+  const open = sim.positions.length;
+  assert.ok(open > 0);
+  assert.ok(Object.values(byEntry).every((n) => n <= 2), 'mỗi phiên mua tối đa 2 mã');
+  assert.equal(new Set(sim.positions).size, sim.positions.length);
+});
+
+test('simulateRolling: volScale giảm tỷ trọng khi VN-Index biến động mạnh', () => {
+  const { cal, data, sectorOf } = fixture();
+  // VN-Index êm đến phiên 330 rồi dao động rất mạnh
+  const wild = cal.map((b, i) => ({ ...b, close: i < 330 ? 1000 + i * 0.5 : 1000 * (1 + (i % 2 ? 0.04 : -0.04)) }));
+  const o = { start: 260, minValue: 0, initialCash: 1e9, sectorOf };
+  const calm = simulateRolling(wild, data, o);
+  const scaled = simulateRolling(wild, data, { ...o, volScale: true });
+  const late = (sim) => sim.equity.slice(-40).reduce((a, e) => a + (1 - e.cash / e.value), 0) / 40;
+  assert.ok(late(scaled) < late(calm) - 0.1, `tỷ trọng cổ phiếu cuối kỳ ${late(scaled).toFixed(2)} phải thấp hơn ${late(calm).toFixed(2)}`);
+});
+
+test('rollingCandidates: dùng bộ yếu tố truyền vào', async () => {
+  const { rollingCandidates } = await import('../src/rolling.js');
+  const rows = Array.from({ length: 40 }, (_, k) => ({ s: `X${k}`, vol: 0.02, f: { mom: k, high: 0, atr: 0.02, adx: 20, aboveMa200: true, ey: 40 - k, bp: 40 - k } }));
+  const a = rollingCandidates(rows).cands.map((c) => c.s);
+  const b = rollingCandidates(rows, [{ key: 'ey', sign: 1 }, { key: 'bp', sign: 1 }]).cands.map((c) => c.s);
+  assert.ok(a.slice(0, 3).includes('X39') && !a.slice(0, 3).includes('X0'), 'động lượng cao nhất đứng đầu');
+  assert.ok(b.slice(0, 3).includes('X0') && !b.slice(0, 3).includes('X39'), 'rẻ nhất theo E/P đứng đầu');
+});
+
+test('valueReader: chỉ dùng P/E, P/B từ 45 ngày trước, quy về giá hiện tại; lỗ thì bỏ', async () => {
+  const { valueReader } = await import('../src/riskresearch.js');
+  const bars = Array.from({ length: 120 }, (_, k) => ({ time: day(k), close: k < 60 ? 10 : 20 }));
+  const pe = [{ date: day(0), value: 10 }, { date: day(80), value: 5 }]; // P/E đổi ở ngày 80: chưa được dùng trước ngày 125
+  const pb = [{ date: day(0), value: 2 }];
+  const r = valueReader(bars, pe, pb);
+  assert.equal(r(30).ey, null); // trước ngày 45 chưa có số liệu đủ trễ
+  assert.ok(Math.abs(r(50).ey - 0.1) < 1e-12); // E/P = 1/10, giá không đổi
+  assert.ok(Math.abs(r(100).ey - 0.05) < 1e-12); // vẫn dùng P/E ngày 0 (= 1/10) nhưng giá đã gấp đôi
+  assert.ok(Math.abs(r(100).bp - 0.25) < 1e-12);
+  assert.equal(valueReader(bars, [{ date: day(0), value: -3 }], pb)(100).ey, null);
+});

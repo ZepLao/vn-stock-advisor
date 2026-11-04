@@ -1,6 +1,6 @@
 // Tool tự đầu tư (tài khoản GIẤY, không đặt lệnh thật): dùng đúng số vốn thực nạp ròng của người dùng, tự chọn mã, tự mua
 // bán theo quy trình danh mục cuốn chiếu đã backtest (rolling.js: điểm ≥ 70 + MA200 hoặc xu hướng chuẩn, tối đa 10 mã,
-// mỗi ngành 3 mã, xét lại mỗi 5 phiên, giữ 40 phiên, không cắt lỗ sát) để kiểm chứng tool có kiếm được lợi nhuận thật không.
+// mỗi ngành 3 mã, xét lại mỗi phiên nhưng mua mới tối đa 2 mã/phiên, giữ 40 phiên, không cắt lỗ sát) để kiểm chứng tool có kiếm được lợi nhuận thật không.
 //
 // Vận hành theo giờ thị trường:
 //  - sau giờ đóng cửa (từ 15:10) xử lý phiên vừa chốt: khớp các lệnh đã quyết định ở phiên trước bằng GIÁ MỞ CỬA của
@@ -25,7 +25,10 @@ const FILE = process.env.AUTOTRADE_FILE || join(dirname(fileURLToPath(import.met
 // maxExposure: luôn giữ 30% tài sản bằng tiền mặt dự phòng (người dùng chọn 11/2026). Kiểm định 8 năm, trung bình 5 lịch
 // quyết định, vốn 5 triệu lô lẻ: lãi 13,2% → 9,4%/năm, sụt trung bình −28,0% → −20,7%, sụt tệ nhất −42,4% → −27,5%;
 // vốn 100 triệu: Sharpe 0,93 → 1,06 (hơn ở 5/5 lịch). Mỗi suất nhỏ lại (7% thay vì 10%), vẫn chia đủ số mã.
-export const AUTO_RULES = { ...ROLLING_RULES, lot: 1, maxExposure: 0.7, closeAfter: 15 * 60 + 10 };
+// step 1 + maxNew 2: mua rải dần — xét mỗi phiên, mỗi phiên mua mới tối đa 2 mã (tổng vẫn 10 mã khác nhau). Kiểm định 8 năm,
+// trung bình 5 lịch, vốn 5 triệu lô lẻ (đã giữ 30% tiền mặt): lãi 9,3% → 12,4%/năm, Sharpe 0,90 → 1,16 (hơn ở 5/5 lịch,
+// dao động giữa các lịch chỉ 1,11–1,19 thay vì 0,45–1,08), sụt TB −21,9% → −14,5%. Vốn 100 triệu lô 100 thì chưa đạt (chỉ giảm sụt).
+export const AUTO_RULES = { ...ROLLING_RULES, step: 1, maxNew: 2, lot: 1, maxExposure: 0.7, closeAfter: 15 * 60 + 10 };
 const round = (v, d = 2) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d);
 
 /** Tài khoản mới (hàm thuần). startAfter = phiên đã chốt gần nhất lúc mở: chỉ giao dịch từ phiên sau đó. */
@@ -153,7 +156,7 @@ export function stepSession(st, ctx, R = AUTO_RULES) {
   const invested = nav - st.cash - selling;
   const free = Math.min(st.cash + selling, Math.max(0, nav * cap - invested));
   const scoreOf = new Map(cands.map((c) => [c.s, c.score]));
-  st.pendingBuy = rollingPlan({ t, held, pendingSell, cands, isCand, medVol, value: nav * cap, free, sectorOf, R }).buys
+  st.pendingBuy = rollingPlan({ t, held, pendingSell, cands, isCand, medVol, value: nav * cap, free, sectorOf, R }).buys.slice(0, R.maxNew ?? Infinity)
     .map((b) => ({ ...b, budget: Math.round(b.budget), score: scoreOf.get(b.s) ?? null, decidedOn: date, reason: `Ứng viên điểm ${scoreOf.get(b.s) ?? '–'}`,
       refPrice: barOf(b.s)?.d.bars[barOf(b.s).i].close ?? null }));
   return st;
@@ -194,7 +197,9 @@ export function formatAutoTradeMessage(st, dates, R = AUTO_RULES) {
     const holding = Object.keys(st.positions).length ? `đang giữ vị thế theo luật (giữ ~${R.hold} phiên)` : 'chưa có vị thế';
     const gate = g?.gated ? `, tạm dừng mua mới vì thị trường yếu (${n0(g.breadth * 100)}% mã trên MA50 phiên ${dm(g.date)})` : '';
     L.push('', `⏸ Hôm nay không giao dịch: ${holding}${gate}.`,
-      `Lần ra quyết định tiếp theo: sau phiên thứ ${nextIn} kể từ hôm nay (tool xét lại mỗi ${R.step} phiên, không mua bán liên tục).`);
+      R.step > 1
+        ? `Lần ra quyết định tiếp theo: sau phiên thứ ${nextIn} kể từ hôm nay (tool xét lại mỗi ${R.step} phiên, không mua bán liên tục).`
+        : `Tool xét lại sau mỗi phiên, mỗi lần mua mới tối đa ${R.maxNew ?? R.slots} mã; mỗi mã giữ ~${R.hold} phiên.`);
   }
   if (fills.length) {
     L.push('', `✅ <b>ĐÃ KHỚP</b> (giá mở cửa${dates.length > 1 ? `, ${dates.length} phiên` : ''})`);

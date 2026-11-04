@@ -4254,7 +4254,7 @@ function renderAutoTrade(d) {
         <ul class="pk-none-list">
           <li>Chọn mã điểm xếp hạng ≥ 70 và trên MA200, hoặc mã xu hướng chuẩn; tối đa ${d.rules.slots} mã, mỗi ngành ${d.rules.perSector} mã</li>
           ${d.rules.maxExposure < 1 ? `<li>Luôn giữ ít nhất ${Math.round((1 - d.rules.maxExposure) * 100)}% tiền mặt dự phòng: cổ phiếu tối đa ${Math.round(d.rules.maxExposure * 100)}% tài sản, mỗi mã khoảng ${Math.round((d.rules.maxExposure / d.rules.slots) * 100)}%</li>` : ''}
-          <li>Quyết định sau giờ đóng cửa (từ 15:10), khớp ở giá mở cửa phiên sau; xét lại mỗi ${d.rules.step} phiên, giữ ${d.rules.hold} phiên</li>
+          <li>Quyết định sau giờ đóng cửa (từ 15:10), khớp ở giá mở cửa phiên sau; ${d.rules.step > 1 ? `xét lại mỗi ${d.rules.step} phiên` : `xét lại mỗi phiên nhưng mua rải dần, mỗi phiên tối đa ${d.rules.maxNew} mã`}, giữ ${d.rules.hold} phiên</li>
           <li>Tính phí, thuế, T+2, kẹt trần/sàn; mua lô lẻ vì vốn nhỏ; vốn tự tăng/giảm theo vốn thực nạp ròng</li>
         </ul>
         <p class="muted small">Đây là tài khoản giấy để kiểm chứng tool có kiếm được lợi nhuận thật hay không: không đặt lệnh thật, không phải lời khuyên đầu tư. Cần ít nhất 6–12 tháng mới đủ để đánh giá.</p>
@@ -4310,7 +4310,7 @@ function renderAutoTrade(d) {
       ${tbl(['Lệnh', 'Mã', 'Số lượng', 'Giá tham chiếu', 'Ngân sách', 'Lý do'], pendRows, d.gate?.gated ? 'Không mua mới phiên tới vì thị trường yếu.' : d.lastDate ? 'Không có lệnh mới cho phiên tới.' : 'Tool sẽ ra lệnh đầu tiên sau giờ đóng cửa phiên giao dịch tới (từ 15:10).')}
     </section>
     <section class="card">
-      <div class="card-head"><div><h3>Cổ phiếu đang nắm giữ</h3><div class="muted small">Lãi/lỗ đã trừ phí bán và thuế. Tool không mua bán liên tục: ra quyết định ${d.rules.step} phiên/lần, mỗi mã giữ ${d.rules.hold} phiên rồi xét lại (còn là ứng viên thì giữ tiếp, không thì bán). Cổ mua phiên T về tài khoản chiều T+2, sớm nhất bán ở phiên T+${d.rules.sellAfter}.</div></div></div>
+      <div class="card-head"><div><h3>Cổ phiếu đang nắm giữ</h3><div class="muted small">Lãi/lỗ đã trừ phí bán và thuế. Tool mua rải dần: ${d.rules.step > 1 ? `ra quyết định ${d.rules.step} phiên/lần` : `xét mỗi phiên, mua mới tối đa ${d.rules.maxNew} mã/phiên`}, mỗi mã giữ ${d.rules.hold} phiên rồi xét lại (còn là ứng viên thì giữ tiếp, không thì bán). Cổ mua phiên T về tài khoản chiều T+2, sớm nhất bán ở phiên T+${d.rules.sellAfter}.</div></div></div>
       ${tbl(['Mã', 'SL', 'Giá vốn', 'Giá hiện tại', 'Giá trị', 'Lãi/lỗ', '%', 'Ngày mua', 'Đã giữ', 'Hạn xét lại'], holdRows, 'Chưa nắm giữ mã nào.')}
     </section>
     </div>

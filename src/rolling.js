@@ -54,11 +54,11 @@ export function vol60(bars, i) {
  * Ứng viên tại một phiên quyết định (hàm thuần): điểm ≥ 70 và trên MA200, hoặc xu hướng chuẩn; điểm cao trước.
  * @param {{ s: string, f: object, vol: number|null }[]} rows các mã thuộc rổ, đủ thanh khoản, có yếu tố tại phiên đó
  */
-export function rollingCandidates(rows) {
-  const ref = buildRef(rows.map((x) => x.f), FACTORS);
+export function rollingCandidates(rows, factors = FACTORS) {
+  const ref = buildRef(rows.map((x) => x.f), factors);
   const vols = rows.map((x) => x.vol).filter((v) => v != null).sort((a, b) => a - b);
   const volCut = vols.length ? vols[Math.floor(vols.length * TREND_PICK_RULE.maxVolPct) - 1] ?? vols.at(-1) : null;
-  const cands = rows.map((x) => ({ ...x, score: compositeScore(x.f, ref, FACTORS)?.score ?? null }))
+  const cands = rows.map((x) => ({ ...x, score: compositeScore(x.f, ref, factors)?.score ?? null }))
     .filter((x) => x.score != null && ((x.score >= 70 && x.f.aboveMa200 !== false)
       || (x.f.high >= TREND_PICK_RULE.nearHigh - 1 && x.vol != null && volCut != null && x.vol <= volCut)))
     .sort((a, b) => b.score - a.score);
@@ -136,12 +136,16 @@ export function oddLotCost(shares, cost) {
  *  - crashBreadth: độ rộng (đo mỗi phiên) dưới ngưỡng này thì bán hết, chờ độ rộng hồi lại ≥ minBreadth mới mua;
  *  - lot / oddLot: lô giao dịch (1 = cho phép lô lẻ) và chi phí thêm mỗi chiều cho phần lô lẻ;
  *  - maxExposure: chỉ đầu tư tối đa phần này của tài sản, còn lại giữ tiền mặt dự phòng;
- *  - reserveDD: được dùng cả phần dự phòng khi VN-Index đang thấp hơn đỉnh 250 phiên ít nhất mức này (mua lúc giảm sâu).
+ *  - reserveDD: được dùng cả phần dự phòng khi VN-Index đang thấp hơn đỉnh 250 phiên ít nhất mức này (mua lúc giảm sâu);
+ *  - volScale: nhân tỷ trọng với (biến động VN-Index trung vị 1 năm / biến động 20 phiên), tối đa 1; vượt quá thì bán bớt mã yếu;
+ *  - maxNew: mỗi lần quyết định mua mới tối đa chừng ấy mã (dùng với step 1 để mua rải dần, không trùng mã);
+ *  - factors: bộ yếu tố xếp hạng chọn ứng viên (mặc định 4 yếu tố);
+ *  - avoid: (f) => true thì không MUA MỚI mã đó (mã đang giữ vẫn theo luật giữ / bán).
  * @param {{ start, minValue, initialCash, members?, sectorOf?, slots?, perSector?, step?, hold?, sizing?, stopPct?,
  *   gateDaily?, gradedLo?, gradedFrac?, crashBreadth?, lot?, oddLot? }} o
  */
 export function simulateRolling(cal, data, o) {
-  const R = { gateDaily: false, gradedLo: null, gradedFrac: 0.5, crashBreadth: null, lot: LOT, oddLot: 0, maxExposure: 1, reserveDD: null, ...ROLLING_RULES, ...o };
+  const R = { gateDaily: false, gradedLo: null, gradedFrac: 0.5, crashBreadth: null, lot: LOT, oddLot: 0, maxExposure: 1, reserveDD: null, volScale: false, maxNew: null, factors: null, avoid: null, ...ROLLING_RULES, ...o };
   const { start, minValue, initialCash, members = null, sectorOf = () => 'Khác' } = o;
   const { brokerage, sellTax, slippage } = DEFAULTS;
   const syms = Object.keys(data);
@@ -155,6 +159,7 @@ export function simulateRolling(cal, data, o) {
   const stats = { decisions: 0, kept: 0, stopped: 0, gated: 0, dailyBuys: 0, crashes: 0 };
   let waiting = false; // phiên quyết định gần nhất chưa mua đủ vì thị trường yếu
   let crashed = false; // đã bán hết vì thị trường sập, chờ hồi
+  let vol20 = null;
 
   // Độ rộng của rổ tại một phiên (chỉ cần MA50, rẻ hơn tính đủ yếu tố). Rổ theo thời điểm chỉ có ở phiên quyết định,
   // nên phiên giữa kỳ dùng rổ của phiên quyết định gần nhất (`snapDate`).
@@ -243,6 +248,21 @@ export function simulateRolling(cal, data, o) {
   return { equity, trades, blocked, fees, stats, positions: [...pos.keys()] };
 
   // Quyết định tại phiên t: mã đến hạn (trừ khi chỉ mua), rồi lấp suất trống theo tỷ trọng thị trường cho phép
+  // Hệ số tỷ trọng theo biến động thị trường: biến động 20 phiên của VN-Index so với trung vị 250 phiên trước đó
+  function volMult(t) {
+    vol20 ??= cal.map((_, k) => {
+      if (k < 21) return null;
+      const r = [];
+      for (let j = k - 19; j <= k; j++) r.push(cal[j].close / cal[j - 1].close - 1);
+      const m = r.reduce((a, b) => a + b, 0) / r.length;
+      return Math.sqrt(r.reduce((a, b) => a + (b - m) ** 2, 0) / (r.length - 1));
+    });
+    const now = vol20[t];
+    const hist = vol20.slice(Math.max(0, t - 250), t).filter((v) => v != null);
+    if (!now || hist.length < 60) return 1;
+    return Math.min(1, median(hist) / now);
+  }
+
   function indexDrawdown(t) {
     let hi = -Infinity;
     for (let k = Math.max(0, t - 249); k <= t; k++) hi = Math.max(hi, cal[k].close);
@@ -260,7 +280,9 @@ export function simulateRolling(cal, data, o) {
       if (!f) continue;
       rows.push({ s, f, vol: vol60(d.bars, i), up: aboveMa50(d.bars, i) });
     }
-    const { cands, isCand, medVol } = rollingCandidates(rows);
+    const { cands: all, isCand, medVol } = rollingCandidates(rows, R.factors || FACTORS);
+    const fOf = R.avoid ? new Map(rows.map((x) => [x.s, x.f])) : null;
+    const cands = R.avoid ? all.filter((c) => !R.avoid(fOf.get(c.s))) : all;
     if (!buyOnly) {
       // Mã đến hạn: vẫn là ứng viên thì giữ tiếp (tính lại hạn), không thì bán. Rồi lấp suất trống.
       const due = rollingPlan({ t, held: pos, pendingSell, cands, isCand, medVol, value, free: 0, sectorOf, R: { ...R, slots: 0 } });
@@ -271,14 +293,30 @@ export function simulateRolling(cal, data, o) {
     let frac = crashed ? 0 : exposureFor(breadthOf(rows), R);
     // Tiền mặt dự phòng: chỉ đầu tư tối đa maxExposure, trừ khi thị trường đã giảm sâu (dùng dự phòng để mua giá rẻ)
     if (frac > R.maxExposure && !(R.reserveDD != null && indexDrawdown(t) <= -R.reserveDD)) frac = R.maxExposure;
+    if (R.volScale && frac > 0) frac *= volMult(t);
     waiting = frac < 1;
     if (frac === 0) { stats.gated++; return; }
+    if (R.volScale && !buyOnly) trimTo(value * frac, value / R.slots, cands);
     const selling = [...pendingSell.keys()].reduce((a, s) => a + (pos.get(s)?.shares || 0) * (lastClose[s] || 0) * 1000, 0);
     const invested = value - cash - selling;
     const free = Math.min(cash + selling, Math.max(0, value * frac - invested));
     // Giữ dự phòng: vẫn chia đủ số mã, mỗi suất nhỏ lại theo tỷ trọng tối đa
-    const sizeBase = R.maxExposure < 1 && frac === R.maxExposure ? value * frac : value;
-    pendingBuy = rollingPlan({ t, held: pos, pendingSell, cands, isCand, medVol, value: sizeBase, free, sectorOf, R }).buys;
+    const sizeBase = R.volScale || (R.maxExposure < 1 && frac === R.maxExposure) ? value * frac : value;
+    pendingBuy = rollingPlan({ t, held: pos, pendingSell, cands, isCand, medVol, value: sizeBase, free, sectorOf, R }).buys.slice(0, R.maxNew ?? Infinity);
+  }
+
+  // Bán bớt mã yếu nhất (không còn là ứng viên trước, rồi điểm thấp) khi cổ phiếu vượt mức cho phép quá một suất
+  function trimTo(limit, slot, cands) {
+    const scoreOf = new Map(cands.map((c) => [c.s, c.score]));
+    const valueOf = (s) => (pos.get(s)?.shares || 0) * (lastClose[s] || 0) * 1000;
+    let invested = [...pos.keys()].filter((s) => !pendingSell.has(s)).reduce((a, s) => a + valueOf(s), 0);
+    if (invested <= limit + slot) return;
+    const weak = [...pos.keys()].filter((s) => !pendingSell.has(s)).sort((a, b) => (scoreOf.get(a) ?? -1) - (scoreOf.get(b) ?? -1));
+    for (const s of weak) {
+      if (invested <= limit) break;
+      pendingSell.set(s, 'trim'); stats.trimmed = (stats.trimmed || 0) + 1;
+      invested -= valueOf(s);
+    }
   }
 }
 
