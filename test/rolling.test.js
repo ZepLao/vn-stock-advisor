@@ -51,3 +51,82 @@ test('simulateRolling: không cắt lỗ theo mặc định; bật stopPct thì 
   const stopped = simulateRolling(cal, data, { start: 260, minValue: 0, initialCash: 1e9, sectorOf, stopPct: 0.15 });
   assert.ok(stopped.trades.some((t) => t.reason === 'stop'), 'giảm ~30% phải bị cắt lỗ 15%');
 });
+
+test('simulateRolling: thoát hết khi thị trường sập (crashBreadth), mặc định thì không', async () => {
+  const { cal, data, sectorOf } = fixture({ crashAt: 300 });
+  const base = simulateRolling(cal, data, { start: 260, minValue: 0, initialCash: 1e9, sectorOf });
+  assert.equal(base.trades.filter((t) => t.reason === 'crash').length, 0);
+  const crash = simulateRolling(cal, data, { start: 260, minValue: 0, initialCash: 1e9, sectorOf, crashBreadth: 0.25 });
+  assert.ok(crash.stats.crashes >= 1);
+  assert.ok(crash.trades.some((t) => t.reason === 'crash'), 'mã tăng đều gãy MA50 hàng loạt phải bị bán');
+});
+
+test('simulateRolling: lô 100 với vốn nhỏ không mua được, cho phép lô lẻ thì mua được', () => {
+  const { cal, data, sectorOf } = fixture();
+  const lot100 = simulateRolling(cal, data, { start: 260, minValue: 0, initialCash: 1e4 * 1000, sectorOf, slots: 10 }); // 10 triệu, mỗi suất 1 triệu < 100 cp × ~25 nghìn
+  const odd = simulateRolling(cal, data, { start: 260, minValue: 0, initialCash: 1e4 * 1000, sectorOf, slots: 10, lot: 1, oddLot: 0.003 });
+  assert.equal(lot100.positions.length, 0);
+  assert.ok(odd.positions.length > 0);
+});
+
+test('exposureFor / oddLotCost: nấc tỷ trọng và chi phí phần lô lẻ', async () => {
+  const { exposureFor, oddLotCost } = await import('../src/rolling.js');
+  const R = { minBreadth: 0.5 };
+  assert.equal(exposureFor(0.49, R), 0);
+  assert.equal(exposureFor(0.5, R), 1);
+  assert.equal(exposureFor(0.35, { ...R, gradedLo: 0.3, gradedFrac: 0.5 }), 0.5);
+  assert.equal(exposureFor(0.2, { ...R, gradedLo: 0.3, gradedFrac: 0.5 }), 0);
+  assert.equal(exposureFor(0.1, { minBreadth: null }), 1);
+  assert.equal(oddLotCost(250, 0.003), 0.003 * (50 / 250));
+  assert.equal(oddLotCost(200, 0.003), 0);
+});
+
+test('riskVerdict / holdEtf: quy tắc đặt trước và lõi ETF mua một lần', async () => {
+  const { riskVerdict, holdEtf } = await import('../src/riskresearch.js');
+  const m = (s1, s2, dd) => ({ first: { sharpe: s1 }, second: { sharpe: s2 }, maxDD: dd });
+  assert.equal(riskVerdict(m(1.1, 1.2, -0.2), m(1, 1, -0.25)), true);
+  assert.equal(riskVerdict(m(1.1, 0.9, -0.2), m(1, 1, -0.25)), false); // một nửa kém hơn
+  assert.equal(riskVerdict(m(1.1, 1.2, -0.3), m(1, 1, -0.25)), false); // sụt sâu hơn
+  const cal = [{ time: 'a' }, { time: 'b' }, { time: 'c' }];
+  const etf = [{ time: 'b', open: 10, close: 11 }, { time: 'c', open: 11, close: 12 }];
+  const v = holdEtf(cal, 0, etf, 5_000_000);
+  assert.equal(v[0], 5_000_000); // chưa có giá ETF
+  // phiên b: mua 400 ccq (lô 100) ở 10 nghìn
+  assert.equal(v[2] - v[1], 400 * 1000);
+});
+
+test('simulateTranched: 1 phần = mô phỏng thường; 5 phần lệch ngày, cộng đúng tài sản', async () => {
+  const { simulateTranched } = await import('../src/rolling.js');
+  const { cal, data, sectorOf } = fixture();
+  const o = { start: 260, minValue: 0, initialCash: 1e9, sectorOf };
+  const one = simulateTranched(cal, data, o, 1);
+  const plain = simulateRolling(cal, data, o);
+  assert.deepEqual(one.equity.map((e) => e.value), plain.equity.map((e) => e.value));
+  const five = simulateTranched(cal, data, o, 5);
+  assert.equal(five.equity.length, cal.length - 260);
+  assert.equal(five.equity[0].value, 1e9); // phiên đầu chưa phần nào mua
+  const last = five.parts.reduce((a, p) => a + p.equity.at(-1).value, 0);
+  assert.ok(Math.abs(five.equity.at(-1).value - last) < 1e-3);
+  assert.equal(five.parts[3].equity[0].time, cal[263].time); // phần 4 bắt đầu lệch 3 phiên
+});
+
+test('robustVerdict: phải hơn B trên bản chia 5 phần VÀ hơn ở ≥ 4/5 lịch đơn', async () => {
+  const { robustVerdict } = await import('../src/riskresearch.js');
+  const m = (s) => ({ sharpe: s });
+  const tr = (s1, s2, dd) => ({ first: { sharpe: s1 }, second: { sharpe: s2 }, maxDD: dd });
+  const B = { singles: [m(1), m(1), m(1), m(1), m(1)], tranched: tr(1, 1, -0.25) };
+  assert.equal(robustVerdict({ singles: [m(2), m(2), m(2), m(2), m(0)], tranched: tr(1.2, 1.1, -0.2) }, B).ok, true);
+  assert.equal(robustVerdict({ singles: [m(2), m(2), m(2), m(0), m(0)], tranched: tr(1.2, 1.1, -0.2) }, B).ok, false); // chỉ 3/5 lịch
+  assert.equal(robustVerdict({ singles: [m(2), m(2), m(2), m(2), m(2)], tranched: tr(1.2, 0.9, -0.2) }, B).ok, false); // nửa sau kém
+});
+
+test('simulateRolling: maxExposure giữ tiền mặt dự phòng, mặc định đầu tư hết', () => {
+  const { cal, data, sectorOf } = fixture();
+  const o = { start: 260, minValue: 0, initialCash: 1e9, sectorOf };
+  const full = simulateRolling(cal, data, o);
+  const kept = simulateRolling(cal, data, { ...o, maxExposure: 0.7 });
+  const cashShare = (sim) => Math.min(...sim.equity.slice(20).map((e) => e.cash / e.value));
+  // dữ liệu mẫu chỉ có 6 suất (2 ngành × 3 mã): đầu tư hết = 60%, giữ dự phòng = 6 × 7% = 42%
+  assert.ok(cashShare(kept) > cashShare(full) + 0.12, 'mỗi suất nhỏ lại 30%');
+  assert.equal(kept.positions.length, full.positions.length, 'vẫn chia đủ số mã');
+});

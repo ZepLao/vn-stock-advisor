@@ -4253,6 +4253,7 @@ function renderAutoTrade(d) {
         <p>Tool sẽ dùng đúng <b>vốn thực nạp ròng</b> của bạn${d.netContributed ? ` (<b>${vnd(d.netContributed)}</b>)` : ''} để tự chọn mã và tự mua bán, giống hệt quy trình bạn đang xem trong các khuyến nghị:</p>
         <ul class="pk-none-list">
           <li>Chọn mã điểm xếp hạng ≥ 70 và trên MA200, hoặc mã xu hướng chuẩn; tối đa ${d.rules.slots} mã, mỗi ngành ${d.rules.perSector} mã</li>
+          ${d.rules.maxExposure < 1 ? `<li>Luôn giữ ít nhất ${Math.round((1 - d.rules.maxExposure) * 100)}% tiền mặt dự phòng: cổ phiếu tối đa ${Math.round(d.rules.maxExposure * 100)}% tài sản, mỗi mã khoảng ${Math.round((d.rules.maxExposure / d.rules.slots) * 100)}%</li>` : ''}
           <li>Quyết định sau giờ đóng cửa (từ 15:10), khớp ở giá mở cửa phiên sau; xét lại mỗi ${d.rules.step} phiên, giữ ${d.rules.hold} phiên</li>
           <li>Tính phí, thuế, T+2, kẹt trần/sàn; mua lô lẻ vì vốn nhỏ; vốn tự tăng/giảm theo vốn thực nạp ròng</li>
         </ul>
@@ -4269,7 +4270,7 @@ function renderAutoTrade(d) {
   const vsIndex = d.pnlPct != null && d.indexPct != null ? d.pnlPct - d.indexPct : null;
   $('at-summary').innerHTML = `
     <div class="cap-stat-grid">
-      <div class="cap-stat-item primary"><div class="cap-stat-label">Tổng tài sản (NAV)</div><div class="cap-stat-val">${vnd(d.nav)}</div><div class="cap-stat-sub">Tiền mặt ${vnd(d.cash)} · cổ phiếu ${vnd(d.stock)}</div></div>
+      <div class="cap-stat-item primary"><div class="cap-stat-label">Tổng tài sản (NAV)</div><div class="cap-stat-val">${vnd(d.nav)}</div><div class="cap-stat-sub">Tiền mặt ${vnd(d.cash)} · cổ phiếu ${vnd(d.stock)}${d.rules.maxExposure < 1 ? ` · giữ dự phòng ≥ ${Math.round((1 - d.rules.maxExposure) * 100)}%` : ''}</div></div>
       <div class="cap-stat-item ${cls}"><div class="cap-stat-label">Lãi / lỗ so với vốn</div><div class="cap-stat-val ${cls}">${d.pnl >= 0 ? '+' : ''}${vnd(d.pnl)}</div><div class="cap-stat-sub ${cls}">${signed(d.pnlPct)}% trên vốn ${vnd(d.funded)}</div></div>
       <div class="cap-stat-item"><div class="cap-stat-label">So với VN-Index cùng kỳ</div><div class="cap-stat-val ${dirClass(vsIndex)}">${vsIndex != null ? `${signed(vsIndex)} điểm %` : '–'}</div><div class="cap-stat-sub">VN-Index ${d.indexPct != null ? `${signed(d.indexPct)}%` : '–'}</div></div>
       <div class="cap-stat-item"><div class="cap-stat-label">Đã chạy</div><div class="cap-stat-val">${d.sessions} phiên</div><div class="cap-stat-sub">Mở ${new Date(d.openedAt).toLocaleDateString('vi-VN')} · ${d.decisions} lần ra quyết định${d.lastDate ? ` · phiên gần nhất ${d.lastDate.split('-').reverse().join('/')}` : ''}</div></div>

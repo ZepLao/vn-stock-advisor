@@ -22,7 +22,10 @@ import { sendMessage, telegramConfig } from './telegram.js';
 import { logTelegramReport } from './db.js';
 
 const FILE = process.env.AUTOTRADE_FILE || join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'autotrade.json');
-export const AUTO_RULES = { ...ROLLING_RULES, lot: 1, closeAfter: 15 * 60 + 10 };
+// maxExposure: luôn giữ 30% tài sản bằng tiền mặt dự phòng (người dùng chọn 11/2026). Kiểm định 8 năm, trung bình 5 lịch
+// quyết định, vốn 5 triệu lô lẻ: lãi 13,2% → 9,4%/năm, sụt trung bình −28,0% → −20,7%, sụt tệ nhất −42,4% → −27,5%;
+// vốn 100 triệu: Sharpe 0,93 → 1,06 (hơn ở 5/5 lịch). Mỗi suất nhỏ lại (7% thay vì 10%), vẫn chia đủ số mã.
+export const AUTO_RULES = { ...ROLLING_RULES, lot: 1, maxExposure: 0.7, closeAfter: 15 * 60 + 10 };
 const round = (v, d = 2) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d);
 
 /** Tài khoản mới (hàm thuần). startAfter = phiên đã chốt gần nhất lúc mở: chỉ giao dịch từ phiên sau đó. */
@@ -144,9 +147,13 @@ export function stepSession(st, ctx, R = AUTO_RULES) {
   for (const s of due.sells) { st.pendingSell[s] = 'hold_end'; pendingSell.add(s); }
   st.lastCandidates = cands.slice(0, 15).map((c) => ({ symbol: c.s, score: c.score }));
   if (gated) return st; // thị trường yếu: không mua mới phiên này
-  const free = st.cash + [...pendingSell].reduce((a, s) => a + (st.positions[s]?.shares || 0) * (closeOf(s) || 0) * 1000, 0);
+  // Giữ dự phòng: cổ phiếu (kể cả lệnh sắp mua) tối đa maxExposure của tài sản; mỗi suất tính trên phần được đầu tư
+  const cap = Math.min(1, R.maxExposure ?? 1);
+  const selling = [...pendingSell].reduce((a, s) => a + (st.positions[s]?.shares || 0) * (closeOf(s) || 0) * 1000, 0);
+  const invested = nav - st.cash - selling;
+  const free = Math.min(st.cash + selling, Math.max(0, nav * cap - invested));
   const scoreOf = new Map(cands.map((c) => [c.s, c.score]));
-  st.pendingBuy = rollingPlan({ t, held, pendingSell, cands, isCand, medVol, value: nav, free, sectorOf, R }).buys
+  st.pendingBuy = rollingPlan({ t, held, pendingSell, cands, isCand, medVol, value: nav * cap, free, sectorOf, R }).buys
     .map((b) => ({ ...b, budget: Math.round(b.budget), score: scoreOf.get(b.s) ?? null, decidedOn: date, reason: `Ứng viên điểm ${scoreOf.get(b.s) ?? '–'}`,
       refPrice: barOf(b.s)?.d.bars[barOf(b.s).i].close ?? null }));
   return st;
@@ -177,6 +184,9 @@ export function formatAutoTradeMessage(st, dates, R = AUTO_RULES) {
     '<i>Tài khoản giấy theo vốn thực nạp ròng của bạn, không đặt lệnh thật</i>',
     `💰 Tài sản <b>${n0(eq.nav)} đ</b> · ${pnl >= 0 ? 'lãi' : 'lỗ'} <b>${pnl >= 0 ? '+' : '−'}${n0(Math.abs(pnl))} đ (${pct((pnl / st.funded) * 100)})</b> trên vốn ${n0(st.funded)} đ${idx != null ? ` · VN-Index cùng kỳ ${pct(idx)}` : ''}`,
   ];
+  if (R.maxExposure != null && R.maxExposure < 1) {
+    L.push(`🛟 Tiền mặt ${n0(eq.cash)} đ (${n0((eq.cash / eq.nav) * 100)}%) · luôn giữ tối thiểu ${n0((1 - R.maxExposure) * 100)}% dự phòng, cổ phiếu tối đa ${n0(R.maxExposure * 100)}%`);
+  }
   if (quiet) {
     const since = st.firstSession != null ? st.session - st.firstSession : 0;
     const nextIn = R.step - (since % R.step);

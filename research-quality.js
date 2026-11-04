@@ -4,11 +4,22 @@
 // Kiểm định 3 yếu tố mới (LN quý đột biến, động lượng ngành, đảo chiều 5 phiên) + khối ngoại: `npm run research-quality -- new3 8`
 import './src/env.js';
 import { runFactorLab, formatFactorReport } from './src/factorlab.js';
+import { runRiskResearch, formatRiskReport, runRobustResearch, formatRobustReport } from './src/riskresearch.js';
 import { runQualityResearch, formatQualityReport, runRoeTest, formatRoeReport, runForeignTest, formatForeignReport } from './src/quality.js';
 
 try {
   const roe = process.argv.includes('roe');
   const years = Number(process.argv.find((a) => /^\d+$/.test(a))) || 7;
+  if (process.argv.includes('robust')) {
+    console.log(`Kiểm định chống may rủi lịch quyết định, ${years} năm…`);
+    console.log(formatRobustReport(await runRobustResearch({ years })));
+    process.exit(0);
+  }
+  if (process.argv.includes('risk')) {
+    console.log(`Nâng cấp lõi danh mục, ${years} năm…`);
+    console.log(formatRiskReport(await runRiskResearch({ years })));
+    process.exit(0);
+  }
   if (process.argv.includes('new3')) {
     console.log(`Kiểm định yếu tố mới, ${years} năm…`);
     console.log(formatFactorReport(await runFactorLab({ years })));
