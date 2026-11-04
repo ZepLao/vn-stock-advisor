@@ -6,12 +6,41 @@ import { scoredPredictions } from './predictions.js';
 const DAY = 86400_000;
 
 // Nguồn khuyến nghị đưa vào bảng (mua = kỳ vọng hơn rổ, tránh = kỳ vọng kém rổ)
+// Lệnh mua chỉ tính khi luật thị trường cho phép mua (độ rộng ≥ ngưỡng), đúng như tool thực sự làm; lệnh mua bị luật chặn
+// được tính riêng là phần lỗ đã tránh. AI đã bỏ khỏi quyết định mua (11/2026), vẫn chấm để theo dõi.
 export const SCORE_SOURCES = [
-  ['final', 'Quyết định cuối (hệ thống + AI)'],
-  ['rank_top', 'Top 8 bảng xếp hạng'],
-  ['ai', 'Gemini'],
-  ['committee', 'Hội đồng đầu tư'],
+  ['rank_top', 'Danh sách mua của hệ thống (top xếp hạng)'],
+  ['ai', 'Gemini (chỉ tham khảo)'],
+  ['committee', 'Hội đồng AI (chỉ tham khảo)'],
 ];
+export const SCORE_MIN_BREADTH = 0.5;
+
+/**
+ * Độ rộng thị trường theo ngày từ giá các mã (hàm thuần): tỷ lệ mã đóng cửa trên MA50 trong các mã có đủ 50 phiên.
+ * @param {Record<string, {time,close}[]|null>} barsBySymbol
+ * @returns {(date: string) => number|null}
+ */
+export function breadthFromBars(barsBySymbol, minCount = 30) {
+  const series = Object.values(barsBySymbol).filter((b) => b?.length >= 50).map((bars) => {
+    const at = new Map(bars.map((b, k) => [b.time, k]));
+    return (date) => {
+      const i = at.get(date);
+      if (i == null || i < 49) return null;
+      let sum = 0;
+      for (let k = i - 49; k <= i; k++) sum += bars[k].close;
+      return bars[i].close > sum / 50;
+    };
+  });
+  const memo = new Map();
+  return (date) => {
+    if (memo.has(date)) return memo.get(date);
+    let up = 0, n = 0;
+    for (const f of series) { const v = f(date); if (v != null) { n++; if (v) up++; } }
+    const r = n >= minCount ? up / n : null;
+    memo.set(date, r);
+    return r;
+  };
+}
 export const SCORE_H = 5;
 
 /** Thứ 2 → thứ 6 của tuần chứa `date` (YYYY-MM-DD, theo lịch). */
@@ -51,7 +80,7 @@ const maxDrawdown = (vals) => {
  * Bảng chấm điểm của tuần chứa `asOf` (hàm thuần).
  * @param {{ equity: {date,nav,funded,index}[], orders: object[], scored: object[], index: {time,close}[], asOf: string }} o
  */
-export function buildScorecard({ equity = [], orders = [], scored = [], index = [], asOf }) {
+export function buildScorecard({ equity = [], orders = [], scored = [], index = [], asOf, breadthAt = null }) {
   const week = weekOf(asOf);
   const sessions = index.filter((b) => b.time >= week.from && b.time <= week.to).map((b) => b.time);
 
@@ -86,8 +115,11 @@ export function buildScorecard({ equity = [], orders = [], scored = [], index = 
   const calls = SCORE_SOURCES.map(([source, label]) => {
     const mine = scored.filter((x) => x.source === source && x.direction && x.result?.[SCORE_H]?.beatBasket != null)
       .filter((x) => { const e = endOf(x.date); return e && e >= week.from && e <= week.to; });
+    // Mua chỉ khi luật thị trường cho phép (không biết độ rộng thì vẫn tính)
+    const allowed = (x) => x.direction < 0 || !breadthAt || (breadthAt(x.date) ?? 1) >= SCORE_MIN_BREADTH;
+    const blocked = mine.filter((x) => x.direction > 0 && !allowed(x));
     const side = (dir) => {
-      const a = mine.filter((x) => x.direction === dir);
+      const a = mine.filter((x) => x.direction === dir && allowed(x));
       return {
         n: a.length,
         right: a.filter((x) => x.result[SCORE_H].beatBasket).length,
@@ -95,8 +127,9 @@ export function buildScorecard({ equity = [], orders = [], scored = [], index = 
         worst: dir > 0 ? [...new Set(a.filter((x) => !x.result[SCORE_H].beatBasket).sort((p, q) => p.result[SCORE_H].excessBasket - q.result[SCORE_H].excessBasket).map((x) => x.symbol))].slice(0, 3) : [],
       };
     };
-    return { source, label, buy: side(1), avoid: side(-1) };
-  }).filter((c) => c.buy.n || c.avoid.n);
+    const avoided = blocked.length ? blocked.reduce((s, x) => s + (x.result[SCORE_H].excessBasket ?? 0), 0) / blocked.length : null;
+    return { source, label, buy: side(1), avoid: side(-1), blocked: { n: blocked.length, avgExcess: avoided } };
+  }).filter((c) => c.buy.n || c.avoid.n || c.blocked.n);
 
   // 3. Một dòng kết luận
   let verdict;
@@ -116,7 +149,7 @@ export async function getScorecard() {
   const [at, sp] = await Promise.all([getAutoTrade().catch(() => null), scoredPredictions()]);
   const asOf = sp.index.at(-1)?.time;
   return {
-    ...buildScorecard({ equity: at?.opened ? at.equity : [], orders: at?.opened ? at.orders : [], scored: sp.scored, index: sp.index, asOf }),
+    ...buildScorecard({ equity: at?.opened ? at.equity : [], orders: at?.opened ? at.orders : [], scored: sp.scored, index: sp.index, asOf, breadthAt: breadthFromBars(sp.bars) }),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -141,7 +174,7 @@ export function formatScorecard(sc) {
   if (sc.calls.length) {
     L.push(`🎯 Khuyến nghị đủ ${sc.horizon} phiên trong tuần (đúng = mua hơn rổ / tránh kém rổ):`);
     for (const c of sc.calls) {
-      L.push(`   ${hesc(c.label)}: mua ${ratio(c.buy)}${c.buy.n ? ` TB ${pp(c.buy.avgExcess)}` : ''} · tránh ${ratio(c.avoid)}`);
+      L.push(`   ${hesc(c.label)}: mua ${ratio(c.buy)}${c.buy.n ? ` TB ${pp(c.buy.avgExcess)}` : ''} · tránh ${ratio(c.avoid)}${c.blocked?.n ? ` · ${c.blocked.n} lệnh mua bị luật thị trường chặn (TB ${pp(c.blocked.avgExcess)} so rổ)` : ''}`);
     }
   }
   return L;

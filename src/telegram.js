@@ -1,6 +1,7 @@
 // Bot Telegram: mỗi ngày giao dịch gửi 2 bản tin (sau ATO ~9:20 và sau đóng cửa ~15:10, giờ VN) gồm gợi ý mua từ
 // nhóm dẫn đầu bảng xếp hạng và việc nên làm với từng mã đang nắm giữ; chuyển tiếp cảnh báo giá trong phiên.
 // Cấu hình trong .env: TELEGRAM_BOT_TOKEN (từ @BotFather) và TELEGRAM_CHAT_ID (chạy `npm run telegram` để lấy).
+import { ROLLING_RULES } from './rolling.js';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -503,7 +504,6 @@ export async function buildReport(kind = 'close') {
     };
   }
 
-  const tracker = await import('./tracker.js');
   const tune = getTuning();
   const buyCount = tune.caution ? Math.min(3, telegramConfig().buyCount) : telegramConfig().buyCount;
   const [market, board, pf, flows] = await Promise.all([
@@ -512,36 +512,25 @@ export async function buildReport(kind = 'close') {
   const sectors = sectorMap(flows);
   const core = coreConfig();
   const heldSyms = (pf?.holdings || []).map((h) => h.symbol).filter((s) => s !== core.symbol);
+  // Lệnh mua chỉ theo hệ thống đã kiểm định: AI không còn duyệt / loại mã (đo thực tế từ 16/10/2026, AI khuyên mua thua rổ)
   const unverified = [];
-  let aiDown = false; // hết hạn mức / chưa có key: không gọi tiếp cho các mã còn lại
-  const judge = async (a) => {
-    if (aiDown) { unverified.push(a.symbol); return null; }
-    try {
-      return await aiFinal(a, tracker);
-    } catch (err) {
-      unverified.push(a.symbol);
-      if (/hạn mức|API_KEY|Chưa cấu hình/.test(err.message)) aiDown = true;
-      console.warn(`[Telegram] AI chưa thẩm định được ${a.symbol}: ${err.message}`);
-      return null;
-    }
-  };
+  const { getMarketRegime } = await import('./regime.js');
+  const regime = await getMarketRegime().catch(() => null);
+  const breadth = regime?.breadth?.pctAboveMa50 != null ? regime.breadth.pctAboveMa50 / 100 : null;
+  const gated = breadth != null && breadth < ROLLING_RULES.minBreadth;
 
   // Ứng viên mua theo quy tắc: xếp hạng ≥ 70 trên MA200 hoặc xu hướng chuẩn, không ⛔, chưa nắm giữ; điểm cao trước
   const pool = board.rows.filter((r) => !r.avoid && !heldSyms.includes(r.symbol) && ((r.score >= 70 && r.aboveMa200 !== false) || r.trendPick))
     .slice(0, buyCount + 8).map((r) => r.symbol);
   const candidates = [], trades = [], rejected = [], junk = [];
-  for (const a of await analyzeAll(pool)) {
+  // Thị trường yếu (độ rộng dưới ngưỡng, cùng luật tool tự đầu tư): không mua mới
+  for (const a of gated ? [] : await analyzeAll(pool)) {
     if (candidates.length >= buyCount + 3) break; // đủ dự phòng cho giới hạn ngành
     if (!BUY_CODES.includes(a.brief?.code)) continue;
     const j = junkCheck(a);
     if (j.junk) { junk.push(`${a.symbol} (${j.reasons[0]})`); continue; }
-    const final = await judge(a);
-    if (!final) continue;
-    const ok = BUY_CODES.includes(final.code);
-    trades.push(tradeRecord(a, final, ok ? 'pick' : 'rejected'));
-    if (ok) candidates.push({ a, final, sector: sectors.get(a.symbol)?.name });
-    else if (!tune.aiVeto) candidates.push({ a, final, aiNo: true, sector: sectors.get(a.symbol)?.name });
-    else rejected.push(a.symbol);
+    trades.push(tradeRecord(a, null, 'pick'));
+    candidates.push({ a, final: null, sector: sectors.get(a.symbol)?.name });
   }
   const held = (await analyzeAll(heldSyms)).filter((a) => a.holding).map((a) => ({ a, sector: sectors.get(a.symbol)?.name }));
   // Vốn = tổng tài sản theo sổ tiền mặt của Danh mục (không có thì ACCOUNT_CAPITAL); tiền mặt khả dụng giới hạn lệnh mua
@@ -566,10 +555,7 @@ export async function buildReport(kind = 'close') {
   }
   const plan = planOrders({ held, candidates, capital: satCapital, cash, buyCount, slots });
   plan.core = coreInfo;
-  const { getMarketRegime } = await import('./regime.js');
-  const regime = await getMarketRegime().catch(() => null);
   // Phân tích từng mã đang nắm: rủi ro + bán / xem lại / giữ / mua thêm (bán và xem lại lấy đúng từ planOrders)
-  const breadth = regime?.breadth?.pctAboveMa50 != null ? regime.breadth.pctAboveMa50 / 100 : null;
   const sellWhy = new Map(plan.sells.map((s) => [s.symbol, s.reason]));
   const reviewSet = new Set(plan.review.map((r) => r.symbol));
   plan.advice = held.map(({ a }) => holdingAdvice(a, {
@@ -577,6 +563,7 @@ export async function buildReport(kind = 'close') {
   }));
   const expectation = plan.buys[0] ? candidates.find((c) => c.a.symbol === plan.buys[0].symbol)?.a.expectation : null;
   const notes = [
+    gated && `⏸ Thị trường yếu: chỉ ${num(breadth * 100, 0)}% mã trên MA50 (dưới ${num(ROLLING_RULES.minBreadth * 100, 0)}%) → không mua mới, mã đang giữ vẫn theo luật giữ / bán.`,
     rejected.length && `AI loại: ${rejected.map(esc).join(', ')}`,
     junk.length && `Chất lượng kém / rủi ro: ${junk.map(esc).join(', ')}`,
     unverified.length && `AI chưa thẩm định kịp: ${unverified.map(esc).join(', ')}`,
