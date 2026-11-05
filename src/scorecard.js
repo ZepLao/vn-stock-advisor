@@ -2,6 +2,7 @@
 // Dữ liệu: lịch sử tài sản + sổ lệnh của tool tự đầu tư (autotrade.js) và các khuyến nghị đã tự chấm (predictions.js).
 import { getAutoTrade } from './autotrade.js';
 import { scoredPredictions } from './predictions.js';
+import { spearman, scoreOf } from './verify.js';
 
 const DAY = 86400_000;
 
@@ -14,6 +15,32 @@ export const SCORE_SOURCES = [
   ['committee', 'Hội đồng AI (chỉ tham khảo)'],
 ];
 export const SCORE_MIN_BREADTH = 0.5;
+
+// Báo động mô hình suy yếu: IC 20 phiên thật của điểm xếp hạng (toàn rổ, mỗi phiên) trên 60 phiên gần nhất có kết quả,
+// so với IC kiểm định 8 năm. Suy yếu khi IC TB dưới một nửa mức kiểm định VÀ thấp hơn mức kiểm định có ý nghĩa (t ≤ −2).
+export const MODEL_RULES = { h: 20, window: 60, minDates: 20, backtestIC: 0.068 };
+
+/** Sức khỏe mô hình (hàm thuần). @param {object[]} scored bản ghi đã chấm (predictions.js) */
+export function modelHealth(scored, R = MODEL_RULES) {
+  const byDate = new Map();
+  for (const x of scored) {
+    if (x.source !== 'rank_all') continue;
+    const sc = scoreOf(x), ex = x.result?.[R.h]?.excessBasket;
+    if (sc == null || ex == null) continue;
+    (byDate.get(x.date) || byDate.set(x.date, []).get(x.date)).push([sc, ex]);
+  }
+  const ics = [...byDate].sort((a, b) => a[0].localeCompare(b[0])).slice(-R.window)
+    .map(([date, rows]) => ({ date, ic: rows.length >= 30 ? spearman(rows.map((r) => r[0]), rows.map((r) => r[1])) : null }))
+    .filter((x) => x.ic != null);
+  if (ics.length < R.minDates) return { status: 'insufficient', n: ics.length, need: R.minDates, backtestIC: R.backtestIC };
+  const v = ics.map((x) => x.ic), m = v.reduce((a, b) => a + b, 0) / v.length;
+  const sd = Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / (v.length - 1));
+  // Các phiên chồng nhau (20 phiên giữ): chia số mẫu hiệu dụng cho h để t không bị thổi phồng
+  const nEff = Math.max(2, v.length / R.h);
+  const t = sd ? (m - R.backtestIC) / (sd / Math.sqrt(nEff)) : 0;
+  const weak = m < R.backtestIC / 2 && t <= -2;
+  return { status: weak ? 'weak' : 'ok', n: v.length, ic: m, t, backtestIC: R.backtestIC, from: ics[0].date, to: ics.at(-1).date };
+}
 
 /**
  * Độ rộng thị trường theo ngày từ giá các mã (hàm thuần): tỷ lệ mã đóng cửa trên MA50 trong các mã có đủ 50 phiên.
@@ -141,7 +168,7 @@ export function buildScorecard({ equity = [], orders = [], scored = [], index = 
       : `Tuần này tool ${v >= 0 ? 'hơn' : 'kém'} VN-Index ${Math.abs(v).toFixed(1).replace('.', ',')} điểm %`)
       + (tool.sessions < 120 ? ` · mới chạy ${tool.sessions} phiên, cần 120–250 phiên mới đánh giá được` : '');
   }
-  return { week, sessions, asOf, verdict, tool, calls, horizon: SCORE_H };
+  return { week, sessions, asOf, verdict, tool, calls, horizon: SCORE_H, model: modelHealth(scored) };
 }
 
 /** Bảng chấm điểm tuần của phiên mới nhất. */
@@ -166,6 +193,10 @@ const ratio = (s) => (s.n ? `${s.right}/${s.n} đúng (${Math.round((s.right / s
 export function formatScorecard(sc) {
   if (!sc) return [];
   const L = ['🏆 <b>BẢNG CHẤM ĐIỂM TUẦN</b>', hesc(sc.verdict)];
+  const m = sc.model;
+  if (m?.status === 'weak') L.push(`🚨 <b>MÔ HÌNH SUY YẾU</b>: độ chính xác xếp hạng 60 phiên gần nhất IC ${m.ic.toFixed(3)} (kiểm định ${m.backtestIC}). Cân nhắc giảm vốn theo tool cho đến khi hồi lại.`);
+  else if (m?.status === 'ok') L.push(`🧭 Mô hình: IC thật ${m.ic.toFixed(3)} trên ${m.n} phiên (kiểm định ${m.backtestIC}) · bình thường`);
+  else if (m) L.push(`🧭 Mô hình: đang tích lũy dữ liệu (${m.n}/${m.need} phiên có kết quả 20 phiên)`);
   const t = sc.tool;
   if (t) {
     L.push(`🤖 Tool tự đầu tư: tuần ${pp(t.week.ret)} · VN-Index ${pp(t.week.index)} · từ đầu ${pp(t.total.ret)} (VN-Index ${pp(t.total.index)}) · sụt lớn nhất ${pp(t.maxDrawdown)}`);

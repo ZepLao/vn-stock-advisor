@@ -84,3 +84,20 @@ test('breadthFromBars: tỷ lệ mã trên MA50', async () => {
   assert.equal(f(day(55)), 0.75);
   assert.equal(f(day(10)), null);
 });
+
+test('modelHealth: chưa đủ dữ liệu / bình thường / suy yếu', async () => {
+  const { modelHealth } = await import('../src/scorecard.js');
+  const day = (k) => new Date(Date.UTC(2026, 0, 1) + k * 86400_000).toISOString().slice(0, 10);
+  const mk = (days, good) => {
+    const out = [];
+    for (let d = 0; d < days; d++) for (let k = 0; k < 40; k++) {
+      // tốt: điểm cao → hơn rổ nhiều; kém: ngẫu nhiên theo kiểu ngược nhẹ
+      const ex = good ? k * 0.001 + ((k * 7 + d) % 5) * 0.004 : -k * 0.0005 + ((k * 13 + d * 3) % 7) * 0.003;
+      out.push({ source: 'rank_all', date: day(d), detail: `Xếp hạng ${k * 2}`, result: { 20: { excessBasket: ex } } });
+    }
+    return out;
+  };
+  assert.equal(modelHealth(mk(10, true)).status, 'insufficient');
+  assert.equal(modelHealth(mk(40, true)).status, 'ok');
+  assert.equal(modelHealth(mk(60, false)).status, 'weak');
+});
