@@ -1,6 +1,7 @@
 @echo off
 rem Khoi dong VN Stock Advisor: Docker Desktop -> database (docker compose) -> Tailscale (ket noi + mo duong) -> app (node server.js)
 rem Nhap dup file nay. App chay ngam (dong cmd khong tat app); tat app bang stop-app.bat.
+rem Tu chay khi dang nhap: schtasks /Create /TN "VN Stock Advisor" /SC ONLOGON /DELAY 0001:00 /TR "\"<duong dan>\start-app.bat\" auto"
 chcp 65001 >nul
 title Khoi dong VN Stock Advisor
 cd /d "%~dp0"
@@ -27,6 +28,12 @@ goto start_app
 
 :docker_ok
 echo [2/4] Bat database...
+rem Container co san (tao tu thu muc cu) thi bat thang; "docker compose up" se loi trung ten container
+docker start vnstock-db vnstock-adminer >nul 2>&1
+if %errorlevel%==0 (
+  echo       Database da bat.
+  goto start_app
+)
 docker compose up -d
 if not %errorlevel%==0 echo       Loi khi bat database, xem thong bao o tren.
 
@@ -90,6 +97,8 @@ if %apptries% lss 15 goto wait_app
 echo       App chua len sau 30 giay, xem loi trong logs\app-error.log
 
 :done
+rem "start-app.bat auto": tu chay khi dang nhap Windows, khong mo trinh duyet, khong cho
+if /i "%~1"=="auto" exit
 start "" http://localhost:3000
 echo.
 echo Xong. App: http://localhost:3000  ^|  Database: http://localhost:8081

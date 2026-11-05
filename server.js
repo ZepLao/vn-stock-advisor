@@ -18,6 +18,7 @@ import { runRollingPortfolio } from './src/rolling.js';
 import { evaluatePredictions } from './src/predictions.js';
 import { getScorecard } from './src/scorecard.js';
 import { getBuyList } from './src/buylist.js';
+import { startHealthWatch, HEALTH_RULES } from './src/health.js';
 import { getVerification } from './src/verify.js';
 import { startHistorySchedule, listSnapshots } from './src/history.js';
 import { getSectorFlows } from './src/sectors.js';
@@ -373,6 +374,9 @@ server.listen(PORT, process.env.HOST || '127.0.0.1', () => {
   // Tool tự đầu tư (tài khoản giấy): sau 15:10 khớp lệnh phiên vừa chốt ở giá mở cửa, ra lệnh cho phiên tới
   startAutoTradeSchedule();
   console.log('Tool tự đầu tư (tài khoản giấy): BẬT — xử lý mỗi phiên sau 15:10, không đặt lệnh thật');
+  // Tự kiểm tra: database, nguồn giá, tool tự đầu tư đã xử lý phiên chưa; lỗi thì báo Telegram (một lần, và khi ổn lại)
+  startHealthWatch(telegramConfig().enabled ? sendMessage : null);
+  console.log(`Tự kiểm tra sức khỏe: BẬT — mỗi ${HEALTH_RULES.minutes} phút, báo Telegram khi có sự cố`);
   // Lưu mua/bán chủ động cả phiên (sau 15:10) cho danh sách theo dõi, danh mục và cổ phiếu tiềm năng
   startFlowCapture(async () => {
     const [w, p, sc] = await Promise.all([getWatchlist().catch(() => []), getPortfolio().catch(() => null), getScreener().catch(() => null)]);

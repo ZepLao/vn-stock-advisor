@@ -4009,6 +4009,7 @@ function renderScorecard(sc) {
     <div class="card-head"><div><h3>🏆 Bảng chấm điểm tuần ${dm(sc.week.from)} – ${dm(sc.week.to)}</h3>
       <div class="muted small">Thước đo duy nhất không tự lừa được: tool có thắng VN-Index bằng tiền thật (giấy) không, và khuyến nghị đúng bao nhiêu.</div></div></div>
     <p class="sc-verdict ${t?.week.vs != null ? dirClass(t.week.vs) : ''}">${esc(sc.verdict)}</p>
+    ${sc.model ? `<p class="small ${sc.model.status === 'weak' ? 'down' : 'muted'}" style="margin:0">${sc.model.status === 'weak' ? `🚨 <b>Mô hình suy yếu</b>: IC xếp hạng thật ${sc.model.ic.toFixed(3)} trên ${sc.model.n} phiên, kiểm định ${sc.model.backtestIC}. Cân nhắc giảm vốn theo tool cho đến khi hồi lại.` : sc.model.status === 'ok' ? `🧭 Mô hình bình thường: IC xếp hạng thật ${sc.model.ic.toFixed(3)} trên ${sc.model.n} phiên (kiểm định ${sc.model.backtestIC}).` : `🧭 Theo dõi mô hình: đang tích lũy dữ liệu (${sc.model.n}/${sc.model.need} phiên có kết quả 20 phiên).`}</p>` : ''}
     ${t ? `<div class="qc-tiles">
       ${tile('Tool tuần này', p(t.week.ret), `VN-Index ${p(t.week.index)}`, dirClass(t.week.vs))}
       ${tile('Từ khi bắt đầu', p(t.total.ret), `VN-Index ${p(t.total.index)} · ${t.sessions} phiên`, dirClass(t.total.vs))}
