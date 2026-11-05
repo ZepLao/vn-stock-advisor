@@ -254,15 +254,32 @@ export function logTelegramReport(kind, text, unverified = []) {
     .catch((err) => console.error('[DB] Lỗi ghi bản tin:', err.message));
 }
 
-/** Đồng bộ khi khởi động và mỗi `minutes` phút. */
-export function startDbSync(minutes = 10) {
+// Lưu database MỘT LẦN MỖI NGÀY, sau khi mọi việc cuối ngày đã xong (ảnh chụp 15:10, tự chấm 15:30): đủ để đối chiếu
+// và kiểm chứng các đề xuất, không ghi trong phiên cho database khỏi phình. Máy bật muộn thì lưu bù ngay lần kiểm tra đầu.
+export const DB_SYNC_AFTER = 16 * 60 + 30;
+
+/** Có cần lưu lúc này không (hàm thuần): đã qua DB_SYNC_AFTER giờ VN và hôm nay chưa lưu. */
+export function dbSyncDue(now, lastDate, after = DB_SYNC_AFTER) {
+  const vn = new Date(now.getTime() + 7 * 3600_000);
+  const today = vn.toISOString().slice(0, 10);
+  return vn.getUTCHours() * 60 + vn.getUTCMinutes() >= after && lastDate !== today ? today : null;
+}
+
+/** Lưu mỗi ngày một lần sau DB_SYNC_AFTER (kiểm tra mỗi `checkMinutes` phút). */
+export function startDbSync(checkMinutes = 10) {
   if (!db()) return null;
-  const run = () => syncAll().then((r) => {
+  let lastDate = null;
+  const sync = () => syncAll().then((r) => {
     const errs = Object.entries(r).filter(([, v]) => typeof v === 'string');
     if (errs.length) console.warn('[DB] Lỗi đồng bộ:', Object.fromEntries(errs));
     const wrote = Object.entries(r).filter(([, v]) => typeof v === 'number' && v > 0);
     if (wrote.length) console.log('[DB] Đã đồng bộ:', wrote.map(([k, v]) => `${k} ${v}`).join(', '));
-  }).catch((err) => console.error('[DB] Không kết nối được database:', err.message));
+    return true;
+  }).catch((err) => { console.error('[DB] Không kết nối được database:', err.message); return false; });
+  const run = async () => {
+    const day = dbSyncDue(new Date(), lastDate);
+    if (day && (await sync())) { lastDate = day; console.log(`[DB] Đã lưu dữ liệu cuối ngày ${day.split('-').reverse().join('/')}`); }
+  };
   setTimeout(run, 30_000);
-  return setInterval(run, minutes * 60_000);
+  return setInterval(run, checkMinutes * 60_000);
 }

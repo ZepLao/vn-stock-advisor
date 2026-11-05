@@ -81,15 +81,11 @@ export function applyAiLabel(it, r) {
   return { ...it, label, sentiment, ai: { relevant: r.relevant, risk: r.relevant && r.risk, reason: r.reason } };
 }
 
-/**
- * Lọc và phân loại tin của một mã bằng AI. Trả về { items (đã bỏ tin không liên quan), removed, checked, pending }.
- * pending = số tin AI chưa phân loại được (dùng nhãn từ khóa).
- */
-export async function aiFilterNews(items, { symbol, companyName, timeout = 60_000 } = {}) {
-  if (!items?.length || process.env.NEWS_AI === '0') return { items, removed: [], checked: 0, pending: items?.length || 0 };
-  await load();
-  const left = items.filter((it) => !cache[newsKey(it, symbol)]);
-  // Tối đa 2 lượt gọi mỗi lần phân tích (mỗi lượt 25 tin); tin còn lại để lần sau
+// Đang phân loại ở nền theo mã: không gọi trùng khi nhiều lần phân tích cùng lúc
+const inflight = new Map();
+
+async function classify(left, { symbol, companyName, timeout }) {
+  // Tối đa 2 lượt gọi mỗi lần (mỗi lượt 25 tin); tin còn lại để lần sau
   for (let k = 0; k < Math.min(left.length, 2 * MAX_PER_CALL); k += MAX_PER_CALL) {
     const todo = left.slice(k, k + MAX_PER_CALL);
     try {
@@ -105,6 +101,26 @@ export async function aiFilterNews(items, { symbol, companyName, timeout = 60_00
       console.warn(`[Lọc tin AI] ${symbol}: ${err.message.slice(0, 160)}`);
       break;
     }
+  }
+}
+
+/**
+ * Lọc và phân loại tin của một mã bằng AI. Trả về { items (đã bỏ tin không liên quan), removed, checked, pending }.
+ * pending = số tin AI chưa phân loại được (dùng nhãn từ khóa).
+ * Mặc định KHÔNG chờ AI: dùng ngay nhãn đã có, tin mới được phân loại ở nền cho lần phân tích sau (AI quá tải có thể
+ * mất hàng chục giây và trước đây làm trang phân tích mã treo). wait = true thì chờ phân loại xong.
+ */
+export async function aiFilterNews(items, { symbol, companyName, timeout = 60_000, wait = false } = {}) {
+  if (!items?.length || process.env.NEWS_AI === '0') return { items, removed: [], checked: 0, pending: items?.length || 0 };
+  await load();
+  const left = items.filter((it) => !cache[newsKey(it, symbol)]);
+  if (left.length) {
+    let job = inflight.get(symbol);
+    if (!job) {
+      job = classify(left, { symbol, companyName, timeout }).finally(() => inflight.delete(symbol));
+      inflight.set(symbol, job);
+    }
+    if (wait) await job;
   }
   const out = items.map((it) => applyAiLabel(it, cache[newsKey(it, symbol)]));
   return {

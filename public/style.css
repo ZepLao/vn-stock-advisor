@@ -1564,3 +1564,13 @@ details.fold[open] > summary { border-bottom: 1px solid var(--border); }
 @media (max-width: 640px) {
   .bt-form input[type="date"], .bt-form input[name="symbol"], .bt-form input[name="qty"], .bt-form input[name="price"], .bt-form input[name="amount"] { width: 100%; }
 }
+
+/* Điện thoại: nhãn kết luận nằm trên câu giải thích; ô số liệu 2 cột, ô lẻ cuối giãn hết hàng */
+@media (max-width: 760px) {
+  .qc-verdict-row { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .qc-action { flex: none; width: 100%; }
+  .cap-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px; }
+  .cap-stat-grid > :last-child:nth-child(odd), .ai-levels > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .cap-stat-item { padding: 12px; min-width: 0; }
+  .cap-stat-val { font-size: 18px; overflow-wrap: anywhere; }
+}

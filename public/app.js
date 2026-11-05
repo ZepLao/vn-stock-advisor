@@ -354,7 +354,7 @@ async function loadMarket() {
     const trend = { up: 'tăng', down: 'giảm', sideways: 'đi ngang' }[m.trend] || m.trend;
     el.innerHTML = `
       <span class="market-live-dot ${m.change >= 0 ? '' : 'down'}"></span>
-      <span class="market-content">VN-Index <b>${fmt(m.close)}</b> <span class="${dirClass(m.change)}">${signed(m.change)} (${signed(m.changePct)}%)</span> · <span class="muted">${trend}</span></span>
+      <span class="market-content">VN-Index <b>${fmt(m.close)}</b> <span class="${dirClass(m.change)}">${signed(m.change)} (${signed(m.changePct)}%)</span> · <span class="muted">xu hướng ${trend}</span></span>
     `;
     el.onclick = () => analyze('VNINDEX');
   };
@@ -2958,7 +2958,11 @@ function renderQuick(a) {
   $('qc-tiles').innerHTML = [
     !a.isIndex && (buying
       ? tile('Vùng mua', entry ? (entry.from === entry.to ? fmt(entry.to) : `${fmt(entry.from)} – ${fmt(entry.to)}`) : '–', entry && close >= entry.from && close <= entry.to ? 'Giá đang trong vùng' : 'Chờ giá về vùng', 'up')
-      : tile('Mua mới', 'Chưa nên', esc(short(wait, 48) || 'Chưa đủ điều kiện'), 'ref')),
+      : tile('Mua mới', 'Chưa nên', br != null && br < 50 ? 'Thị trường yếu, chờ ≥ 50% mã khỏe'
+        : r?.avoid ? 'Thuộc 10% mã điểm thấp nhất'
+        : r && r.aboveMa200 === false ? 'Cần giá vượt lên trên MA200'
+        : r && r.score < 70 && !r.trendPick ? `Cần điểm ≥ 70 (hiện ${r.score})`
+        : esc(short(wait, 40) || 'Chưa đủ điều kiện'), 'ref')),
     !a.isIndex && stop && tile('Ngưỡng thoát', fmt(stop), `${signed((stop / close - 1) * 100, 1)}% · đóng cửa dưới thì bán`, 'down'),
     r && tile('Điểm xếp hạng', `${r.score}/100`, `hạng ${r.position}/${r.universe} toàn sàn`, r.score >= 70 ? 'up' : r.score < 40 ? 'down' : ''),
     br != null && tile('Thị trường', `${Math.round(br)}% mã khỏe`, br < 50 ? 'Yếu: không mua mới' : 'Đủ mạnh để mua', br < 50 ? 'down' : 'up'),
@@ -2974,7 +2978,8 @@ function renderQuick(a) {
   if (r?.trendPick) good.push('Xu hướng chuẩn: gần đỉnh 52 tuần, biến động êm');
   if (r && r.score >= 70 && r.aboveMa200 !== false) good.push(`Thuộc nhóm dẫn đầu sàn (điểm ${r.score})`);
   if (r?.aboveMa200 === true) good.push('Giá trên MA200: xu hướng dài hạn tốt');
-  for (const [k, label] of RANK_PART_LABEL) if ((r?.parts?.[k] ?? 0) >= 80) good.push(`${label} mạnh`);
+  const STRONG = { mom: 'Động lượng 12 tháng mạnh', high: 'Giá sát đỉnh 52 tuần', atr: 'Giá đi êm (biến động thấp)', adx: 'Xu hướng rõ (ADX cao)' };
+  for (const [k] of RANK_PART_LABEL) if ((r?.parts?.[k] ?? 0) >= 80) good.push(STRONG[k]);
   const first = tone === 'up' ? good : bad, second = tone === 'up' ? bad : good;
   const why = [...first.map((t) => [tone === 'up' ? 'up' : 'down', t]), ...second.map((t) => [tone === 'up' ? 'down' : 'up', t])].slice(0, 3);
   $('qc-why').innerHTML = why.map(([t, x]) => `<li class="${t}"><span aria-hidden="true">${t === 'up' ? '▲' : '▼'}</span>${esc(short(x))}</li>`).join('');
@@ -3087,7 +3092,7 @@ function stepRows(steps, { close }) {
 
 /** Khung vốn: nhập số tiền → quy ra tỷ trọng, số tiền, số cp, mức lỗ tối đa và tỷ trọng vị thế đang giữ. */
 function capitalBox(a, steps) {
-  const capM = capitalM() || 500;
+  const capM = capitalM() || (a.capital?.nav ? Math.round(a.capital.nav / 1e5) / 10 : 0) || 500;
   const cap = capM * 1e6;
   const l = a.brief.levels;
   const close = a.price.close;
@@ -4133,7 +4138,7 @@ document.addEventListener('click', async (e) => {
 // ---------- Bảng rộng → dạng thẻ trên điện thoại ----------
 // Gắn nhãn cột (data-label) cho từng ô để CSS hiển thị mỗi hàng thành một thẻ khi màn hình hẹp.
 // Bảng ma trận (độ nhạy, dòng tiền theo ngày) và bảng ít cột vẫn giữ dạng bảng cuộn ngang.
-const CARD_TABLE_MIN_COLS = 5;
+const CARD_TABLE_MIN_COLS = 4;
 const CARD_TABLE_SKIP = '.bt-sens, .flow-table';
 
 function cardifyTable(table) {

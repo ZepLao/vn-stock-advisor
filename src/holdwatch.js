@@ -1,4 +1,4 @@
-// Theo dõi mã ĐANG NẮM GIỮ trong phiên: cứ HOLDWATCH_MINUTES phút (mặc định 15) xem giá các mã trong danh mục và báo
+// Theo dõi mã ĐANG NẮM GIỮ trong phiên: cứ HOLDWATCH_MINUTES phút (mặc định 1) xem giá các mã trong danh mục và báo
 // qua Telegram + danh sách cảnh báo trong app chỉ khi cần làm ngay: dưới ngưỡng cảnh báo −15% giá vốn (như bản tin),
 // sát giá sàn, rủi ro rơi tự do. Mức cảnh báo chốt một lần mỗi ngày ở lượt đầu tiên. Mỗi loại một lần/mã/ngày, tối đa
 // HOLD_RULES.maxDaily tin Telegram/ngày (cảnh báo vẫn lưu trong app).
@@ -17,7 +17,7 @@ const FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'holdwa
 // dưới ngưỡng cảnh báo −15% giá vốn, sát giá sàn (có thể kẹt không bán được), rủi ro rơi tự do. Mỗi loại một lần/mã/ngày,
 // tối đa maxDaily tin/ngày; mọi cảnh báo vẫn được lưu trong app.
 export const HOLD_RULES = {
-  minutes: Number(process.env.HOLDWATCH_MINUTES) || 15,
+  minutes: Number(process.env.HOLDWATCH_MINUTES) || 1,
   maxDaily: Number(process.env.HOLDWATCH_MAX_DAILY) || 3,
   drops: [{ at: -0.065, key: 'floor' }], // ≈ sát sàn HOSE (−7%)
   nearPct: 0.05, // còn ≤ 5% là chạm ngưỡng cảnh báo −15%: báo trước để chuẩn bị (một lần/mã/ngày)
