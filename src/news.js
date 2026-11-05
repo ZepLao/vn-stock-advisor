@@ -1,9 +1,32 @@
-// Thu thập tin tức từ RSS (Google News, CafeF, Vietstock) và chấm điểm cảm xúc.
+// Thu thập tin tức từ RSS (CafeF, Vietstock và Google News giới hạn trong báo tài chính uy tín) và chấm điểm cảm xúc.
 import { fetchText, cached } from './http.js';
 import { analyzeSentiment, normalize } from './sentiment.js';
 
 const MIN = 60_000;
 const DAY = 86_400_000;
+
+// Chỉ lấy tin từ báo tài chính – chứng khoán chính thống. Bỏ trang tổng hợp, câu view, diễn đàn, báo địa phương và
+// mục giải trí của báo đại chúng (Google News trả cả ngoisao.vnexpress.net khi hỏi "FPT").
+export const QUALITY_SOURCES = [
+  'cafef.vn', 'cafebiz.vn', 'vietstock.vn', 'finance.vietstock.vn', 'vneconomy.vn', 'tinnhanhchungkhoan.vn', 'baodautu.vn',
+  'vietnambiz.vn', 'bnews.vn', 'vietnamplus.vn', 'thoibaotaichinhvietnam.vn', 'vir.com.vn', 'thesaigontimes.vn',
+  'nhipsongkinhdoanh.vn', 'bbw.vn',
+];
+const QUALITY_HOSTS = new Set(QUALITY_SOURCES);
+const NEWS_GROUPS = [
+  ['cafef.vn', 'cafebiz.vn'], ['vietstock.vn'], ['vneconomy.vn', 'tinnhanhchungkhoan.vn', 'baodautu.vn'],
+  ['vietnambiz.vn', 'bnews.vn', 'vietnamplus.vn', 'thoibaotaichinhvietnam.vn', 'vir.com.vn', 'thesaigontimes.vn', 'nhipsongkinhdoanh.vn', 'bbw.vn'],
+];
+
+// Báo uy tín nhưng tổng hợp mọi lĩnh vực: cần thêm ngữ cảnh chứng khoán để tránh trùng chữ viết tắt
+const GENERAL_HOSTS = new Set(['vietnamplus.vn', 'vir.com.vn', 'thesaigontimes.vn', 'nhipsongkinhdoanh.vn', 'bbw.vn']);
+
+const sourceHost = (url) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return null; } };
+
+/** Tin có đến từ nguồn uy tín không (theo tên miền của nguồn; bỏ "www."). Tin không rõ nguồn: loại. */
+export function isQualitySource(url) {
+  return QUALITY_HOSTS.has(sourceHost(url));
+}
 
 const MARKET_FEEDS = [
   { source: 'CafeF', url: 'https://cafef.vn/thi-truong-chung-khoan.rss' },
@@ -47,6 +70,7 @@ export function parseRss(xml, defaultSource) {
   return items.map((it) => {
     let title = stripTags(tag(it, 'title'));
     const source = stripTags(tag(it, 'source')) || defaultSource;
+    const sourceUrl = it.match(/<source\b[^>]*\burl="([^"]+)"/i)?.[1] || null;
     // Google News nối " - Tên báo" vào cuối tiêu đề
     if (source && title.endsWith(` - ${source}`)) title = title.slice(0, -(source.length + 3));
     const description = stripTags(decode(tag(it, 'description')));
@@ -54,6 +78,7 @@ export function parseRss(xml, defaultSource) {
       title,
       link: tag(it, 'link'),
       source,
+      sourceUrl,
       // Mô tả của Google News chỉ lặp lại tiêu đề nên bỏ qua
       summary: defaultSource === 'Google News' ? '' : description.slice(0, 300),
       publishedAt: parseDate(tag(it, 'pubDate')),
@@ -151,21 +176,31 @@ async function marketItems() {
 
 /** Tin liên quan tới một mã trong `days` ngày gần nhất, mới nhất trước. */
 export async function getStockNews(symbol, { companyName, days = 30, limit = 40 } = {}) {
-  const query = `"${symbol}" (cổ phiếu OR chứng khoán OR doanh nghiệp) when:${days}d`;
-  const gUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=vi&gl=VN&ceid=VN:vi`;
-  const [google, market] = await Promise.all([
-    getFeed(gUrl, 'Google News').catch(() => []),
+  // Hỏi Google News chỉ trong các báo uy tín (site:…), chia nhóm để một báo ra nhiều bài (Vietstock Daily…) không
+  // chiếm hết 100 kết quả; rồi lọc lại theo tên miền nguồn cho chắc
+  const gUrl = (sites) => `https://news.google.com/rss/search?q=${encodeURIComponent(`${symbol} (${sites.map((d) => `site:${d}`).join(' OR ')}) when:${days}d`)}&hl=vi&gl=VN&ceid=VN:vi`;
+  const [groups, market] = await Promise.all([
+    Promise.all(NEWS_GROUPS.map((g) => getFeed(gUrl(g), 'Google News').catch(() => []))),
     marketItems(),
   ]);
+  const google = groups.flat().filter((it) => isQualitySource(it.sourceUrl));
 
   // Mã cổ phiếu phải xuất hiện như một từ độc lập, viết hoa
   const symRe = new RegExp(`(?<![\\p{L}\\p{N}])${symbol}(?![\\p{L}\\p{N}])`, 'u');
   const shortName = companyName?.replace(/^(Công ty|Tổng Công ty|Ngân hàng)( Cổ phần| TNHH)?\s*/i, '').trim();
-  const mentions = (it) => symRe.test(it.title) || symRe.test(it.summary)
-    || (shortName && shortName.length > 6 && `${it.title} ${it.summary}`.includes(shortName));
+  const hasName = (it) => shortName && shortName.length > 6 && `${it.title} ${it.summary}`.includes(shortName);
+  const mentions = (it) => symRe.test(it.title) || symRe.test(it.summary) || hasName(it);
+  // Báo tổng hợp (không chuyên chứng khoán): chữ viết tắt dễ trùng mã ("Diễn đàn châu Á mới (NAF)"), nên phải có
+  // tên công ty hoặc ngữ cảnh chứng khoán quanh mã mới nhận
+  const stockCtx = new RegExp(`(cổ phiếu|mã|CP|HOSE|HNX|UPCoM)\\s*:?\\s*${symbol}(?![\\p{L}\\p{N}])|^${symbol}\\s*:|(?<![\\p{L}\\p{N}])${symbol}\\s*,\\s*[A-Z]{3}(?![\\p{L}\\p{N}])|[A-Z]{3}\\s*,\\s*${symbol}(?![\\p{L}\\p{N}])|chứng khoán|cổ phiếu|cổ đông|cổ tức|niêm yết|lợi nhuận|doanh thu`, 'iu');
+  const relevant = (it) => mentions(it)
+    && (!GENERAL_HOSTS.has(sourceHost(it.sourceUrl)) || hasName(it) || stockCtx.test(`${it.title} ${it.summary}`));
 
   const cutoff = Date.now() - days * DAY;
-  return dedupe([...market.filter(mentions), ...google.filter(mentions)])
+  // Trang hồ sơ công ty ("Tên công ty (MÃ)", "MÃ: Công ty Cổ phần … (HOSE)") và trang dữ liệu chứng quyền không phải tin
+  const profile = new RegExp(`^[^:.,!?]{0,80}\\(\\s*${symbol}\\s*\\)$|^${symbol}\\s*:\\s*(Công ty|Tổng Công ty|Ngân hàng|Tập đoàn)[^:]*\\((HOSE|HNX|UPCOM)\\)$|^Chứng quyền\\.`, 'iu');
+  return dedupe([...market.filter(relevant), ...google.filter(relevant)])
+    .filter((it) => !profile.test(it.title.trim()))
     .filter((it) => !it.publishedAt || it.publishedAt >= cutoff)
     .sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0))
     .slice(0, limit)

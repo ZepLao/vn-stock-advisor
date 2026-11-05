@@ -40,3 +40,18 @@ test('parseRss: bỏ hậu tố tên báo của Google News, đọc năm 2 chữ
   const c = parseRss('<item><title><![CDATA[Tin A]]></title><pubDate>Thu, 15 Oct 26 19:11:00 +0700</pubDate></item>', 'CafeF');
   assert.equal(new Date(c[0].publishedAt).getUTCFullYear(), 2026);
 });
+
+test('Chỉ nhận tin từ báo tài chính uy tín, loại trang câu view và mục giải trí', async () => {
+  const { isQualitySource, parseRss } = await import('../src/news.js');
+  assert.equal(isQualitySource('https://cafef.vn'), true);
+  assert.equal(isQualitySource('https://www.tinnhanhchungkhoan.vn'), true);
+  assert.equal(isQualitySource('https://finance.vietstock.vn'), true);
+  assert.equal(isQualitySource('https://nguoiquansat.vn'), false);
+  assert.equal(isQualitySource('https://24hmoney.vn'), false);
+  assert.equal(isQualitySource('https://ngoisao.vnexpress.net'), false);
+  assert.equal(isQualitySource('https://cafef.vn.fake.com'), false);
+  assert.equal(isQualitySource(null), false);
+  const [it] = parseRss('<rss><item><title>FPT lãi lớn - CafeF</title><link>x</link><source url="https://cafef.vn">CafeF</source></item></rss>', 'Google News');
+  assert.equal(it.sourceUrl, 'https://cafef.vn');
+  assert.equal(it.title, 'FPT lãi lớn');
+});
