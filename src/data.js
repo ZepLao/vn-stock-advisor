@@ -48,9 +48,9 @@ export function isTradingSession(now = new Date()) {
   return (m >= 540 && m <= 695) || (m >= 780 && m <= 905);
 }
 
-// TTL thông minh: trong giờ GD cập nhật nhanh (3–5 phút), ngoài giờ GD nến tĩnh không đổi nên cache 30–60 phút
-export const priceTTL = () => (isTradingSession() ? 3 * MIN : 30 * MIN);
-export const moversTTL = () => (isTradingSession() ? 5 * MIN : 30 * MIN);
+// TTL thông minh: trong giờ GD giá mới mỗi lượt quét 1 phút (giữ 50 giây), ngoài giờ GD nến tĩnh không đổi nên cache 30–60 phút
+export const priceTTL = () => (isTradingSession() ? 50_000 : 30 * MIN);
+export const moversTTL = () => (isTradingSession() ? 50_000 : 30 * MIN);
 
 /**
  * Tiến độ phiên hôm nay theo giờ Việt Nam: { date, progress 0..1, closed }. closed = đã qua 15:00 (nến ngày đã chốt).

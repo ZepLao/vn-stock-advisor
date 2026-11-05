@@ -179,12 +179,12 @@ export function formatDiagnosis(d) {
   if (top.length) L.push(`IC yếu tố 10 phiên (${top[0].days} phiên): ${top.slice(0, 3).map((x) => `${esc(x.factor)} ${x.ic.toFixed(2)}`).join(', ')} … ${esc(top.at(-1).factor)} ${top.at(-1).ic.toFixed(2)}`);
   if (d.outlook?.n) L.push(`Triển vọng tuần: VN-Index nằm trong khoảng AI dự báo ${pc(d.outlook.hit, 0)} (${d.outlook.n} tuần)`);
   const snaps = d.hours.reduce((s, h) => s + h.n, 0);
-  L.push(`Dữ liệu trong phiên đã thu: ${snaps.toLocaleString('vi-VN')} điểm giá`);
+  if (snaps) L.push(`Dữ liệu trong phiên đã thu (trước khi chuyển sang lưu cuối ngày): ${snaps.toLocaleString('vi-VN')} điểm giá`);
   L.push('', d.suggestions.length ? '<b>Đề xuất</b>' : '<i>Chưa đủ mẫu để đề xuất thay đổi.</i>', ...d.suggestions.map((s) => `• ${esc(s.text)}`));
   return L.join('\n');
 }
 
-/** Mỗi ngày giao dịch sau 15:45 chạy một lần; gửi Telegram khi có đề xuất mới hoặc vào thứ 6. */
+/** Mỗi ngày giao dịch sau 16:45 (database đã lưu cuối ngày lúc 16:30) chạy một lần; gửi Telegram khi có đề xuất mới hoặc vào thứ 6. */
 export function startDiagnose(notify = null) {
   if (!dbConfig().enabled) return null;
   const areas = (d) => (d?.suggestions || []).map((s) => s.area).sort().join(',');
@@ -192,7 +192,7 @@ export function startDiagnose(notify = null) {
     try {
       const vn = new Date(Date.now() + 7 * 3600_000);
       const today = vn.toISOString().slice(0, 10);
-      if (vn.getUTCHours() * 60 + vn.getUTCMinutes() < 15 * 60 + 45) return;
+      if (vn.getUTCHours() * 60 + vn.getUTCMinutes() < 16 * 60 + 45) return;
       const { bars } = await getPriceHistory('VNINDEX');
       const prev = await lastDiagnosis();
       if (bars.at(-1)?.time !== today || prev?.date === today) return;

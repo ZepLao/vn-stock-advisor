@@ -29,7 +29,7 @@ import { telegramConfig, sendReport, buildReport, startTelegramSchedule, sendMes
 import { startSelfReview, runSelfReview, lastReview } from './src/selfreview.js';
 import { getTuning, tuningLog } from './src/tuning.js';
 import { getMarketRegime } from './src/regime.js';
-import { startDbSync, syncAll } from './src/db.js';
+import { startDbSync, syncAll, dbConfig } from './src/db.js';
 import { startRadar, getRadar, radarTick, RADAR } from './src/radar.js';
 import { startHoldWatch, HOLD_RULES } from './src/holdwatch.js';
 import { startTelegramBot } from './src/telegrambot.js';
@@ -43,7 +43,7 @@ import {
 } from './src/tracker.js';
 
 const PORT = Number(process.env.PORT) || 3000;
-const SCAN_MINUTES = Number(process.env.SCAN_MINUTES) || 10;
+const SCAN_MINUTES = Number(process.env.SCAN_MINUTES) || 1;
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), 'public');
 
 process.on('unhandledRejection', (reason) => {
@@ -338,9 +338,9 @@ server.listen(PORT, process.env.HOST || '127.0.0.1', () => {
     ? `AI: BẬT — thứ tự dự phòng: ${ai.providers.map((p) => `${p.label} (${p.model})`).join(' → ')}${process.env.GEMINI_AUTO_SCAN === '1' ? ' · tự động phân tích danh mục' : ''}`
     : 'AI: TẮT (thêm GEMINI_API_KEY hoặc MISTRAL_API_KEY… vào file .env để bật)');
   startMonitor(SCAN_MINUTES);
-  // Chép dữ liệu hằng ngày sang PostgreSQL (docker compose up -d) mỗi 10 phút
-  console.log(startDbSync(10)
-    ? 'Database: BẬT — đồng bộ dữ liệu sang PostgreSQL mỗi 10 phút (xem tại http://localhost:8081)'
+  // Lưu dữ liệu sang PostgreSQL mỗi ngày một lần sau 16:30 (đối chiếu, kiểm chứng đề xuất)
+  console.log(startDbSync()
+    ? 'Database: BẬT — lưu dữ liệu mỗi ngày một lần sau 16:30 (xem tại http://localhost:8081)'
     : 'Database: TẮT (chạy `docker compose up -d` và đặt DB_PASSWORD trong .env)');
   // Sau 15:30 mỗi ngày giao dịch: đối chiếu gợi ý cũ với giá thật, tự chỉnh thông số khi đủ bằng chứng
   startSelfReview(telegramConfig().enabled ? sendMessage : null);
@@ -348,11 +348,12 @@ server.listen(PORT, process.env.HOST || '127.0.0.1', () => {
   console.log(startTelegramSchedule()
     ? 'Telegram: BẬT — lệnh cho phiên tới 15:10, nhắc lệnh 8:30 (khi có lệnh), tổng kết tuần thứ 6, cảnh báo khẩn mã đang giữ'
     : 'Telegram: TẮT (thêm TELEGRAM_BOT_TOKEN và TELEGRAM_CHAT_ID vào .env, xem `npm run telegram`)');
-  // Trong phiên: chụp giá toàn rổ + thị trường vào database; sau 15:45: chẩn đoán lại các dự đoán
-  if (startIntraday()) {
+  // Sau 16:45: chẩn đoán lại các dự đoán bằng dữ liệu cuối ngày (chụp trong phiên chỉ khi INTRADAY=1)
+  if (dbConfig().enabled) {
     startDiagnose(telegramConfig().enabled ? sendMessage : null);
-    console.log(`Thu thập trong phiên: BẬT — mỗi ${INTRADAY_MINUTES} phút (9:15–11:30, 13:00–14:45) vào database; chẩn đoán dự đoán mỗi ngày sau 15:45`);
+    console.log('Chẩn đoán dự đoán: BẬT — mỗi ngày sau 16:45');
   }
+  if (startIntraday()) console.log(`Thu thập trong phiên: BẬT — mỗi ${INTRADAY_MINUTES} phút vào database`);
   // Triển vọng tuần do AI phân tích: gửi Telegram từ 15:45 thứ 6 (bù thứ 7, chủ nhật)
   if (startOutlookSchedule(telegramConfig().enabled ? sendMessage : null)) console.log('Triển vọng tuần (AI): BẬT — gửi Telegram từ 15:45 thứ 6 (bù thứ 7, chủ nhật)');
   // Nhận lệnh từ Telegram: "mua HPG 1000 25.5 21/10" → ghi vào danh mục

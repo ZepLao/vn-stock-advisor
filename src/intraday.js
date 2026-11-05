@@ -1,3 +1,4 @@
+// TẮT mặc định (database chỉ lưu cuối ngày, xem db.js); bật lại bằng INTRADAY=1.
 // Thu thập dữ liệu TRONG PHIÊN vào database: mỗi INTRADAY_MINUTES phút (mặc định 15) trong giờ giao dịch
 // (9:15–11:30, 13:00–14:45; bỏ ATO/ATC và nghỉ trưa) chụp VN-Index, độ rộng, khối ngoại toàn sàn và giá + điểm
 // xếp hạng của toàn bộ rổ. Dùng để chẩn đoán: gợi ý buổi sáng diễn biến thế nào trong ngày, vùng mua có được khớp
@@ -44,7 +45,7 @@ export async function captureIntraday({ force = false } = {}) {
 }
 
 export function startIntraday() {
-  if (!dbConfig().enabled) return null;
+  if (process.env.INTRADAY !== '1' || !dbConfig().enabled) return null;
   const run = () => captureIntraday()
     .then((n) => n && console.log(`[Trong phiên] Đã lưu ảnh chụp ${n} dòng`))
     .catch((err) => console.error('[Trong phiên] Lỗi:', err.message));

@@ -20,7 +20,7 @@ node scan.js FPT --bt=breakout # score | ma_cross | rsi_reversion | macd | break
 npm test             # chạy unit test
 ```
 
-Biến môi trường: `PORT` (mặc định 3000) và `SCAN_MINUTES` (chu kỳ quét danh mục, mặc định 10).
+Biến môi trường: `PORT` (mặc định 3000) và `SCAN_MINUTES` (chu kỳ quét danh mục, mặc định 1).
 
 ## Bật phân tích AI bằng Gemini
 
@@ -89,7 +89,7 @@ Hạn mức miễn phí của các bên thay đổi thường xuyên; xem trang 
   Tin lãnh đạo/người thân mua vào được tính tích cực, bán ra tính tiêu cực.
 - **Thị trường hôm nay** (thanh bên): top tăng mạnh, giảm mạnh, khối ngoại mua ròng, bán ròng và giá trị giao dịch
   lớn nhất của sàn HOSE (chỉ mã giao dịch ≥ 5 tỷ trong phiên); bấm một mã để phân tích. Mã HNX/UPCoM bị chặn (mở lại bằng `SCREEN_FLOORS=HOSE,HNX,UPCOM`).
-- **Danh mục theo dõi**: lưu tại `data/state.json`. Server tự quét lại mỗi 10 phút trong giờ giao dịch.
+- **Danh mục theo dõi**: lưu tại `data/state.json`. Server tự quét lại mỗi phút trong giờ giao dịch.
 - **Cảnh báo** (biểu tượng chuông): khi khuyến nghị thay đổi, khi giá vượt hoặc thủng ngưỡng bạn đặt,
   hoặc khi xuất hiện cảnh báo rủi ro mới.
 

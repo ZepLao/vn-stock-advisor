@@ -1,4 +1,4 @@
-// Radar cơ hội mua trong phiên: cứ RADAR_MINUTES phút (mặc định 15) tính lại bảng xếp hạng toàn bộ rổ
+// Radar cơ hội mua trong phiên: cứ RADAR_MINUTES phút (mặc định 1) tính lại bảng xếp hạng toàn bộ rổ
 // (HOSE ≥ 5 tỷ/phiên), tìm mã thuộc nhóm MUA đã kiểm chứng (điểm ≥ 70, trên MA200) mà giá đang nằm trong vùng mua,
 // cho AI thẩm định rồi báo ngay qua Telegram + danh sách cảnh báo trong app, không phải chờ bản tin 15:10.
 // Nghiên cứu 10/2026 (2023–2026): mã vừa lọt vào nhóm MUA hơn VN-Index ngang mã đã ở sẵn trong nhóm (~+0,5%/20 phiên),
@@ -26,7 +26,7 @@ const BUY_CODES = ['BUY', 'ACCUMULATE'];
 const RADAR_TELEGRAM = process.env.RADAR_TELEGRAM === '1';
 
 export const RADAR = {
-  minutes: Number(process.env.RADAR_MINUTES) || 15,
+  minutes: Number(process.env.RADAR_MINUTES) || 1,
   maxDaily: Number(process.env.RADAR_MAX_DAILY) || 5, // số tin cơ hội tối đa mỗi ngày (chống spam)
   perTick: 6, // số mã phân tích sâu mỗi lượt (tránh dội API nguồn dữ liệu / AI)
   recheckMinutes: 45, // mã đã xem mà chưa vào vùng mua: xem lại sau
