@@ -354,7 +354,7 @@ async function loadMarket() {
     const trend = { up: 'tăng', down: 'giảm', sideways: 'đi ngang' }[m.trend] || m.trend;
     el.innerHTML = `
       <span class="market-live-dot ${m.change >= 0 ? '' : 'down'}"></span>
-      <span class="market-content">VN-Index <b>${fmt(m.close)}</b> <span class="${dirClass(m.change)}">${signed(m.change)} (${signed(m.changePct)}%)</span> · <span class="muted">xu hướng ${trend}</span></span>
+      <span class="market-content">VN-Index <b>${fmt(m.close)}</b> <span class="${dirClass(m.change)}"><span class="mk-extra">${signed(m.change)} (</span>${signed(m.changePct)}%<span class="mk-extra">)</span></span><span class="mk-extra"> · <span class="muted">xu hướng ${trend}</span></span></span>
     `;
     el.onclick = () => analyze('VNINDEX');
   };
@@ -382,9 +382,9 @@ async function loadMarketRegime() {
     const dot = $('regime-dot');
     const content = $('regime-content');
     if (dot) dot.style.background = r.color || '#10b981';
-    const tag = r.regime === 'CONFIRMED_UPTREND' ? '🟢 TĂNG MẠNH' : (r.regime === 'UPTREND_UNDER_PRESSURE' ? '🟡 ÁP LỰC' : r.regime === 'UNKNOWN' ? '⚪ CHƯA RÕ' : '🔴 RỦI RO');
+    const tag = r.regime === 'CONFIRMED_UPTREND' ? 'TĂNG MẠNH' : (r.regime === 'UPTREND_UNDER_PRESSURE' ? 'ÁP LỰC' : r.regime === 'UNKNOWN' ? 'CHƯA RÕ' : 'RỦI RO');
     if (content) {
-      content.innerHTML = `<b>${tag}</b> · Phân phối: <b>${r.distDays ?? '–'}</b>/25 · CP: <b>${r.exposure}</b>`;
+      content.innerHTML = `<b>${tag}</b><span class="mk-extra"> · Phân phối: <b>${r.distDays ?? '–'}</b>/25</span><span class="mk-cp"> · CP <b>${r.exposure}</b></span>`;
     }
     el.title = `Chế độ: ${r.label}\nSố ngày phân phối 25 phiên: ${r.distDays}\nTỷ trọng cổ phiếu khuyến nghị: ${r.exposure}\n${r.desc}`;
     el.onclick = () => {
@@ -4013,7 +4013,7 @@ function renderScorecard(sc) {
   return `
     <div class="card-head"><div><h3>🏆 Bảng chấm điểm tuần ${dm(sc.week.from)} – ${dm(sc.week.to)}</h3>
       <div class="muted small">Thước đo duy nhất không tự lừa được: tool có thắng VN-Index bằng tiền thật (giấy) không, và khuyến nghị đúng bao nhiêu.</div></div></div>
-    <p class="sc-verdict ${t?.week.vs != null ? dirClass(t.week.vs) : ''}">${esc(sc.verdict)}</p>
+    <p class="sc-verdict ${t?.cashOnly ? '' : t?.week.vs != null ? dirClass(t.week.vs) : ''}">${esc(sc.verdict)}</p>
     ${sc.model ? `<p class="small ${sc.model.status === 'weak' ? 'down' : 'muted'}" style="margin:0">${sc.model.status === 'weak' ? `🚨 <b>Mô hình suy yếu</b>: IC xếp hạng thật ${sc.model.ic.toFixed(3)} trên ${sc.model.n} phiên, kiểm định ${sc.model.backtestIC}. Cân nhắc giảm vốn theo tool cho đến khi hồi lại.` : sc.model.status === 'ok' ? `🧭 Mô hình bình thường: IC xếp hạng thật ${sc.model.ic.toFixed(3)} trên ${sc.model.n} phiên (kiểm định ${sc.model.backtestIC}).` : `🧭 Theo dõi mô hình: đang tích lũy dữ liệu (${sc.model.n}/${sc.model.need} phiên có kết quả 20 phiên).`}</p>` : ''}
     ${t ? `<div class="qc-tiles">
       ${tile('Tool tuần này', p(t.week.ret), `VN-Index ${p(t.week.index)}`, dirClass(t.week.vs))}
