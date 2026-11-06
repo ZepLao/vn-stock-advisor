@@ -165,12 +165,12 @@ test('formatAutoTradeMessage (mua rải dần): xét mỗi phiên, mỗi phiên 
   assert.ok(seen.size >= 4, 'mua rải dần qua nhiều phiên');
 });
 
-test('stepSession: luôn giữ 30% tiền mặt dự phòng, vẫn chia đủ số mã', () => {
-  assert.equal(AUTO_RULES.maxExposure, 0.7);
+test('stepSession: maxExposure 0,7 thì luôn giữ 30% tiền mặt dự phòng, vẫn chia đủ số mã', () => {
+  assert.equal(AUTO_RULES.maxExposure, 1, 'tool đang đầu tư tối đa 100%');
   const data = makeData();
   const st = newAccount(5_000_000, day(START - 1));
   for (let t = START; t < START + 30; t++) {
-    stepSession(st, { date: day(t), data, universe: null, minValue: 1e9, sectorOf });
+    stepSession(st, { date: day(t), data, universe: null, minValue: 1e9, sectorOf }, { ...AUTO_RULES, maxExposure: 0.7 });
     const e = st.equity.at(-1);
     assert.ok(e.cash / e.nav >= 0.28, `phiên ${t}: tiền mặt ${(e.cash / e.nav * 100).toFixed(1)}% phải ≥ ~30%`);
     const planned = st.pendingBuy.reduce((a, b) => a + b.budget, 0);
