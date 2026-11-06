@@ -1705,7 +1705,7 @@ function renderBuyList(d) {
         <div class="qc-verdict ${tone}">${d.gated ? '⏸ CHƯA MUA MỚI' : d.picks.length ? '▲ ĐƯỢC MUA' : '• CHƯA CÓ MÃ'}</div>
         <p class="qc-action">${d.gated
           ? `Thị trường yếu: chỉ ${Math.round(d.breadth * 100)}% mã trên MA50 (dưới ${Math.round(d.minBreadth * 100)}%). Luật đã kiểm định 8 năm: chờ thị trường khỏe lại, danh sách dưới đây là các mã sẽ mua khi đủ điều kiện.`
-          : `Mua rải dần tối đa 2 mã mỗi phiên, theo thứ tự trong danh sách. Mỗi mã khoảng ${Math.round((d.maxExposure / d.slots) * 100)}% tài sản, luôn giữ ${Math.round((1 - d.maxExposure) * 100)}% tiền mặt. Giữ khoảng 40 phiên; lỗ 15% so với giá vốn thì cắt lỗ.`}</p>
+          : `Mua rải dần tối đa 2 mã mỗi phiên, theo thứ tự trong danh sách. Mỗi mã khoảng ${Math.round((d.maxExposure / d.slots) * 100)}% tài sản${d.maxExposure < 1 ? `, luôn giữ ${Math.round((1 - d.maxExposure) * 100)}% tiền mặt` : ""}. Giữ khoảng 40 phiên; lỗ 15% so với giá vốn thì cắt lỗ.`}</p>
       </div>
       <div class="qc-tiles">
         <div class="qc-tile ${d.gated ? 'down' : 'up'}"><span class="k">Mã khỏe (trên MA50)</span><b class="v">${d.breadth != null ? `${Math.round(d.breadth * 100)}%` : '–'}</b><span class="s">cần ≥ ${Math.round(d.minBreadth * 100)}% mới mua mới</span></div>

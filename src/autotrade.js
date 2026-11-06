@@ -22,7 +22,10 @@ import { sendMessage, telegramConfig } from './telegram.js';
 import { logTelegramReport } from './db.js';
 
 const FILE = process.env.AUTOTRADE_FILE || join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'autotrade.json');
-// maxExposure: luôn giữ 30% tài sản bằng tiền mặt dự phòng (người dùng chọn 11/2026). Kiểm định 8 năm, trung bình 5 lịch
+// maxExposure 1 (06/11/2026, bỏ giữ 30% tiền mặt): kiểm định cuốn chiếu 2020→11/2026, mỗi năm chọn theo dữ liệu quá khứ trong các
+// phương án sụt ≤ −25%, năm nào cũng chọn "100% + độ rộng 50%": vốn 5 triệu lô lẻ (có cắt lỗ 15%) lãi 2020→nay 141% → 269%,
+// 11,8% → 18,3%/năm, Sharpe 1,25 → 1,35, sụt từng lịch −16/−20% → −20%. Vốn 100 triệu lô 100 sụt −27% (vượt −25%).
+// Trước đó: giữ 30% tiền mặt dự phòng (người dùng chọn 11/2026, khi chưa mua rải dần / cắt lỗ). Kiểm định 8 năm, trung bình 5 lịch
 // quyết định, vốn 5 triệu lô lẻ: lãi 13,2% → 9,4%/năm, sụt trung bình −28,0% → −20,7%, sụt tệ nhất −42,4% → −27,5%;
 // vốn 100 triệu: Sharpe 0,93 → 1,06 (hơn ở 5/5 lịch). Mỗi suất nhỏ lại (7% thay vì 10%), vẫn chia đủ số mã.
 // step 1 + maxNew 2: mua rải dần — xét mỗi phiên, mỗi phiên mua mới tối đa 2 mã (tổng vẫn 10 mã khác nhau). Kiểm định 8 năm,
@@ -42,7 +45,7 @@ export function benchReturn(bars, from, to) {
 
 // stopPct 0,15: kiểm định cuốn chiếu 2020→11/2026 (chọn theo dữ liệu quá khứ, quy tắc đặt trước): lãi 125% → 142%, Sharpe 1,16 → 1,25,
 // sụt tối đa không tệ hơn, hơn luật cũ 5/7 năm. Tiền nhàn rỗi mua ETF: lãi cao hơn nhưng Sharpe 1,16 → 0,89, sụt −33% → không áp dụng.
-export const AUTO_RULES ={ ...ROLLING_RULES, step: 1, maxNew: 2, lot: 1, maxExposure: 0.7, stopPct: 0.15, closeAfter: 15 * 60 + 10 };
+export const AUTO_RULES ={ ...ROLLING_RULES, step: 1, maxNew: 2, lot: 1, maxExposure: 1, stopPct: 0.15, closeAfter: 15 * 60 + 10 };
 const round = (v, d = 2) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d);
 
 /** Tài khoản mới (hàm thuần). startAfter = phiên đã chốt gần nhất lúc mở: chỉ giao dịch từ phiên sau đó. */
