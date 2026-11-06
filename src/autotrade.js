@@ -28,7 +28,21 @@ const FILE = process.env.AUTOTRADE_FILE || join(dirname(fileURLToPath(import.met
 // step 1 + maxNew 2: mua rải dần — xét mỗi phiên, mỗi phiên mua mới tối đa 2 mã (tổng vẫn 10 mã khác nhau). Kiểm định 8 năm,
 // trung bình 5 lịch, vốn 5 triệu lô lẻ (đã giữ 30% tiền mặt): lãi 9,3% → 12,4%/năm, Sharpe 0,90 → 1,16 (hơn ở 5/5 lịch,
 // dao động giữa các lịch chỉ 1,11–1,19 thay vì 0,45–1,08), sụt TB −21,9% → −14,5%. Vốn 100 triệu lô 100 thì chưa đạt (chỉ giảm sụt).
-export const AUTO_RULES = { ...ROLLING_RULES, step: 1, maxNew: 2, lot: 1, maxExposure: 0.7, closeAfter: 15 * 60 + 10 };
+// Thước đo thật của tool: ETF VN30 (E1VFVN30) là lựa chọn thay thế bỏ tiền vào được, không chia cổ tức tiền mặt nên giá
+// đã gồm cổ tức của rổ. 8 năm 10/2018–11/2026: ETF ~9,5%/năm (sụt −42%); từ 7/2023 ~18%/năm, hơn cả tool lẫn VN-Index.
+export const BENCH_ETF = 'E1VFVN30';
+
+/** Lãi của chuỗi giá `bars` từ phiên `from` tới phiên `to` (lấy giá đóng cửa gần nhất không sau mỗi ngày; hàm thuần). */
+export function benchReturn(bars, from, to) {
+  if (!bars?.length || !from || !to) return null;
+  const at = (d) => { let px = null; for (const b of bars) { if (b.time > d) break; px = b.close; } return px; };
+  const a = at(from), z = at(to);
+  return a > 0 && z > 0 ? z / a - 1 : null;
+}
+
+// stopPct 0,15: kiểm định cuốn chiếu 2020→11/2026 (chọn theo dữ liệu quá khứ, quy tắc đặt trước): lãi 125% → 142%, Sharpe 1,16 → 1,25,
+// sụt tối đa không tệ hơn, hơn luật cũ 5/7 năm. Tiền nhàn rỗi mua ETF: lãi cao hơn nhưng Sharpe 1,16 → 0,89, sụt −33% → không áp dụng.
+export const AUTO_RULES ={ ...ROLLING_RULES, step: 1, maxNew: 2, lot: 1, maxExposure: 0.7, stopPct: 0.15, closeAfter: 15 * 60 + 10 };
 const round = (v, d = 2) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d);
 
 /** Tài khoản mới (hàm thuần). startAfter = phiên đã chốt gần nhất lúc mở: chỉ giao dịch từ phiên sau đó. */
@@ -128,6 +142,14 @@ export function stepSession(st, ctx, R = AUTO_RULES) {
   st.equity.push({ date, nav: Math.round(nav), cash: Math.round(st.cash), funded: st.funded, index: ctx.index ?? null });
   st.lastDate = date;
 
+  // Cắt lỗ: giá trị theo giá đóng cửa ≤ giá vốn × (1 − stopPct) thì bán phiên sau (giống mô phỏng simulateRolling)
+  if (R.stopPct) {
+    for (const [s, p] of Object.entries(st.positions)) {
+      const c = closeOf(s);
+      if (c != null && !st.pendingSell[s] && c * 1000 * p.shares <= p.cost * (1 - R.stopPct)) st.pendingSell[s] = 'stop';
+    }
+  }
+
   // 4. Phiên quyết định (mỗi `step` phiên kể từ phiên đầu): ra lệnh cho phiên tới
   if ((t - st.firstSession) % R.step !== 0) return st;
   st.decisions += 1;
@@ -167,7 +189,7 @@ const tEsc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
 const n0 = (v, d = 0) => (v == null || !Number.isFinite(v) ? '–' : v.toLocaleString('vi-VN', { maximumFractionDigits: d }));
 const pct = (v) => (v == null || !Number.isFinite(v) ? '–' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${n0(Math.abs(v), 2)}%`);
 const dm = (d) => d.slice(8, 10) + '/' + d.slice(5, 7);
-const REASON = { hold_end: 'hết 40 phiên, không còn là ứng viên', delisted: 'ngừng giao dịch' };
+const REASON = { hold_end: 'hết 40 phiên, không còn là ứng viên', delisted: 'ngừng giao dịch', stop: 'cắt lỗ 15% so với giá vốn' };
 
 /**
  * Tin báo sau khi xử lý các phiên `dates` (hàm thuần): lệnh đã khớp, lệnh không khớp, lệnh cho phiên tới, tài sản.
@@ -379,6 +401,8 @@ export async function getAutoTrade() {
     initialCapital: st.initialCapital, funded: st.funded, cash: Math.round(st.cash), stock: Math.round(stock), nav: Math.round(nav),
     pnl: Math.round(nav - st.funded), pnlPct: st.funded > 0 ? round(((nav - st.funded) / st.funded) * 100) : null,
     indexPct: first?.index && lastEq?.index ? round((lastEq.index / first.index - 1) * 100) : null,
+    etf: BENCH_ETF,
+    etfPct: await getPriceHistory(BENCH_ETF).then(({ bars }) => benchReturn(bars, first?.date, lastEq?.date)).then((r) => (r == null ? null : round(r * 100))).catch(() => null),
     fees: Math.round(st.fees),
     closed: { n: sells.length, wins: sells.filter((o) => o.pnl > 0).length, pnl: sells.reduce((a, o) => a + (o.pnl || 0), 0) },
     holdings, pending, orders: [...st.orders].reverse().slice(0, 200), unfilled: [...st.unfilled].reverse().slice(0, 30),

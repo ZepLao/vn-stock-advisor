@@ -101,3 +101,21 @@ test('modelHealth: chưa đủ dữ liệu / bình thường / suy yếu', async
   assert.equal(modelHealth(mk(40, true)).status, 'ok');
   assert.equal(modelHealth(mk(60, false)).status, 'weak');
 });
+
+test('buildScorecard: so với ETF VN30 cùng kỳ (tuần và từ đầu)', async () => {
+  const { benchReturn } = await import('../src/autotrade.js');
+  const etfBars = [{ time: '2026-10-29', close: 30 }, { time: '2026-10-30', close: 30 }, { time: '2026-11-02', close: 30.3 }, { time: '2026-11-04', close: 31.5 }];
+  // ngày không có phiên ETF: lấy giá đóng cửa gần nhất trước đó
+  assert.ok(Math.abs(benchReturn(etfBars, '2026-10-30', '2026-11-03') - 0.01) < 1e-12);
+  assert.equal(benchReturn([], '2026-10-30', '2026-11-03'), null);
+  assert.equal(benchReturn(etfBars, '2026-10-01', '2026-11-03'), null); // trước phiên ETF đầu tiên
+  const index = [{ time: '2026-10-30', close: 1000 }, { time: '2026-11-04', close: 1010 }];
+  const equity = [{ date: '2026-10-30', nav: 100, funded: 100, index: 1000 }, { date: '2026-11-04', nav: 102, funded: 100, index: 1010 }];
+  const sc = buildScorecard({ equity, index, asOf: '2026-11-04', etf: etfBars });
+  assert.ok(Math.abs(sc.tool.total.etf - 0.05) < 1e-12);
+  assert.ok(Math.abs(sc.tool.total.vsEtf - (0.02 - 0.05)) < 1e-12);
+  assert.ok(Math.abs(sc.tool.week.etf - 0.05) < 1e-12);
+  const lines = formatScorecard(sc).join('\n');
+  assert.match(lines, /ETF VN30 \+5,0%/);
+  assert.match(lines, /So với mua ETF VN30 rồi để đó: kém 3,0%/);
+});

@@ -1,6 +1,7 @@
 // Bảng chấm điểm tuần: tool có thắng thị trường thật không (tài khoản giấy) và khuyến nghị đúng / sai bao nhiêu.
 // Dữ liệu: lịch sử tài sản + sổ lệnh của tool tự đầu tư (autotrade.js) và các khuyến nghị đã tự chấm (predictions.js).
-import { getAutoTrade } from './autotrade.js';
+import { getAutoTrade, benchReturn, BENCH_ETF } from './autotrade.js';
+import { getPriceHistory } from './data.js';
 import { scoredPredictions } from './predictions.js';
 import { spearman, scoreOf } from './verify.js';
 
@@ -105,13 +106,14 @@ const maxDrawdown = (vals) => {
 
 /**
  * Bảng chấm điểm của tuần chứa `asOf` (hàm thuần).
- * @param {{ equity: {date,nav,funded,index}[], orders: object[], scored: object[], index: {time,close}[], asOf: string }} o
+ * @param {{ equity: {date,nav,funded,index}[], orders: object[], scored: object[], index: {time,close}[], asOf: string, etf?: {time,close}[] }} o
+ *   etf: giá ETF VN30 (BENCH_ETF), thước đo thay thế bỏ tiền vào được
  */
-export function buildScorecard({ equity = [], orders = [], scored = [], index = [], asOf, breadthAt = null }) {
+export function buildScorecard({ equity = [], orders = [], scored = [], index = [], asOf, breadthAt = null, etf = [] }) {
   const week = weekOf(asOf);
   const sessions = index.filter((b) => b.time >= week.from && b.time <= week.to).map((b) => b.time);
 
-  // 1. Tool tự đầu tư: tuần này và từ đầu, so với VN-Index cùng kỳ
+  // 1. Tool tự đầu tư: tuần này và từ đầu, so với VN-Index và ETF VN30 cùng kỳ
   let tool = null;
   if (equity.length) {
     const perf = perfSeries(equity);
@@ -128,12 +130,15 @@ export function buildScorecard({ equity = [], orders = [], scored = [], index = 
     const cashOnly = inWeek.length > 0 && inWeek.every((e) => e.cash != null && e.cash >= e.nav * 0.99);
     tool = {
       nav: last.nav, funded: last.funded, sessions: equity.length, cashOnly,
-      week: { ret: weekRet, index: idxWeek, vs: weekRet != null && idxWeek != null ? weekRet - idxWeek : null, from: before?.date, to: end?.date },
-      total: { ret: perf.at(-1).perf - 1, index: first.index && last.index ? last.index / first.index - 1 : null },
+      week: { ret: weekRet, index: idxWeek, vs: weekRet != null && idxWeek != null ? weekRet - idxWeek : null, from: before?.date, to: end?.date,
+        etf: end && before ? benchReturn(etf, before.date, end.date) : null },
+      total: { ret: perf.at(-1).perf - 1, index: first.index && last.index ? last.index / first.index - 1 : null, etf: benchReturn(etf, first.date, last.date) },
       maxDrawdown: maxDrawdown(perf.map((p) => p.perf)),
       trades: { buys: fills.filter((o) => o.side === 'BUY').length, sells: sells.length, wins: sells.filter((o) => o.pnl > 0).length, pnl: sells.reduce((a, o) => a + o.pnl, 0) },
     };
     tool.total.vs = tool.total.index != null ? tool.total.ret - tool.total.index : null;
+    tool.total.vsEtf = tool.total.etf != null ? tool.total.ret - tool.total.etf : null;
+    tool.etf = BENCH_ETF;
   }
 
   // 2. Khuyến nghị có kết quả 5 phiên kết thúc trong tuần này
@@ -173,10 +178,10 @@ export function buildScorecard({ equity = [], orders = [], scored = [], index = 
 
 /** Bảng chấm điểm tuần của phiên mới nhất. */
 export async function getScorecard() {
-  const [at, sp] = await Promise.all([getAutoTrade().catch(() => null), scoredPredictions()]);
+  const [at, sp, etf] = await Promise.all([getAutoTrade().catch(() => null), scoredPredictions(), getPriceHistory(BENCH_ETF).then((r) => r.bars).catch(() => [])]);
   const asOf = sp.index.at(-1)?.time;
   return {
-    ...buildScorecard({ equity: at?.opened ? at.equity : [], orders: at?.opened ? at.orders : [], scored: sp.scored, index: sp.index, asOf, breadthAt: breadthFromBars(sp.bars) }),
+    ...buildScorecard({ equity: at?.opened ? at.equity : [], orders: at?.opened ? at.orders : [], scored: sp.scored, index: sp.index, asOf, breadthAt: breadthFromBars(sp.bars), etf }),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -199,7 +204,8 @@ export function formatScorecard(sc) {
   else if (m) L.push(`🧭 Mô hình: đang tích lũy dữ liệu (${m.n}/${m.need} phiên có kết quả 20 phiên)`);
   const t = sc.tool;
   if (t) {
-    L.push(`🤖 Tool tự đầu tư: tuần ${pp(t.week.ret)} · VN-Index ${pp(t.week.index)} · từ đầu ${pp(t.total.ret)} (VN-Index ${pp(t.total.index)}) · sụt lớn nhất ${pp(t.maxDrawdown)}`);
+    L.push(`🤖 Tool tự đầu tư: tuần ${pp(t.week.ret)} · VN-Index ${pp(t.week.index)} · ETF VN30 ${pp(t.week.etf)} · từ đầu ${pp(t.total.ret)} (VN-Index ${pp(t.total.index)}, ETF VN30 ${pp(t.total.etf)}) · sụt lớn nhất ${pp(t.maxDrawdown)}`);
+    if (t.total.vsEtf != null) L.push(`   So với mua ETF VN30 rồi để đó: ${t.total.vsEtf >= 0 ? 'hơn' : 'kém'} ${pp(Math.abs(t.total.vsEtf)).replace(/^[+−]/, '')} từ đầu — ETF là lựa chọn thay thế thật; tool phải hơn được nó mới đáng dùng`);
     if (t.trades.buys || t.trades.sells) L.push(`   Lệnh trong tuần: ${t.trades.buys} mua · ${t.trades.sells} bán (${t.trades.wins} lãi)`);
   }
   if (sc.calls.length) {
