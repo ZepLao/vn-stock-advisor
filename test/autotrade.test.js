@@ -30,7 +30,7 @@ const START = 260;
 
 test('Tài khoản tự đầu tư đi đúng quy trình cuốn chiếu: khớp từng phiên bằng kết quả mô phỏng 3 năm (lô 100)', () => {
   const data = makeData();
-  const sim = simulateRolling(cal, data, { ...ROLLING_RULES, maxExposure: AUTO_RULES.maxExposure, step: AUTO_RULES.step, maxNew: AUTO_RULES.maxNew, start: START, minValue: 1e9, initialCash: 1e9, sectorOf });
+  const sim = simulateRolling(cal, data, { ...ROLLING_RULES, maxExposure: AUTO_RULES.maxExposure, stopPct: AUTO_RULES.stopPct, step: AUTO_RULES.step, maxNew: AUTO_RULES.maxNew, start: START, minValue: 1e9, initialCash: 1e9, sectorOf });
   const st = newAccount(1e9, day(START - 1));
   for (let t = START; t < N; t++) stepSession(st, { date: day(t), index: cal[t].close, data, universe: null, minValue: 1e9, sectorOf }, { ...AUTO_RULES, lot: 100 });
   const buys = st.orders.filter((o) => o.side === 'BUY').length;
@@ -177,4 +177,16 @@ test('stepSession: luôn giữ 30% tiền mặt dự phòng, vẫn chia đủ s�
     assert.ok(e.nav - e.cash + planned <= e.nav * 0.7 + 1, 'cổ phiếu + lệnh sắp mua ≤ 70% tài sản');
   }
   assert.ok(Object.keys(st.positions).length > 0, 'vẫn mua cổ phiếu');
+});
+
+test('stepSession: lỗ 15% so với giá vốn (theo giá đóng cửa) thì đặt lệnh bán cắt lỗ cho phiên sau', () => {
+  const data = makeData();
+  const st = newAccount(5_000_000, day(START - 1));
+  stepSession(st, { date: day(START), data, universe: null, minValue: 1e9, sectorOf });
+  stepSession(st, { date: day(START + 1), data, universe: null, minValue: 1e9, sectorOf });
+  const [s, p] = Object.entries(st.positions)[0];
+  p.cost = p.shares * data[s].bars[START + 2].close * 1000 / 0.84; // giá đóng cửa phiên sau thấp hơn giá vốn 16%
+  stepSession(st, { date: day(START + 2), data, universe: null, minValue: 1e9, sectorOf });
+  assert.equal(st.pendingSell[s], 'stop');
+  assert.equal(AUTO_RULES.stopPct, 0.15);
 });

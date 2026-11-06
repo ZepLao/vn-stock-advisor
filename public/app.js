@@ -1705,7 +1705,7 @@ function renderBuyList(d) {
         <div class="qc-verdict ${tone}">${d.gated ? '⏸ CHƯA MUA MỚI' : d.picks.length ? '▲ ĐƯỢC MUA' : '• CHƯA CÓ MÃ'}</div>
         <p class="qc-action">${d.gated
           ? `Thị trường yếu: chỉ ${Math.round(d.breadth * 100)}% mã trên MA50 (dưới ${Math.round(d.minBreadth * 100)}%). Luật đã kiểm định 8 năm: chờ thị trường khỏe lại, danh sách dưới đây là các mã sẽ mua khi đủ điều kiện.`
-          : `Mua rải dần tối đa 2 mã mỗi phiên, theo thứ tự trong danh sách. Mỗi mã khoảng ${Math.round((d.maxExposure / d.slots) * 100)}% tài sản, luôn giữ ${Math.round((1 - d.maxExposure) * 100)}% tiền mặt. Giữ khoảng 40 phiên.`}</p>
+          : `Mua rải dần tối đa 2 mã mỗi phiên, theo thứ tự trong danh sách. Mỗi mã khoảng ${Math.round((d.maxExposure / d.slots) * 100)}% tài sản, luôn giữ ${Math.round((1 - d.maxExposure) * 100)}% tiền mặt. Giữ khoảng 40 phiên; lỗ 15% so với giá vốn thì cắt lỗ.`}</p>
       </div>
       <div class="qc-tiles">
         <div class="qc-tile ${d.gated ? 'down' : 'up'}"><span class="k">Mã khỏe (trên MA50)</span><b class="v">${d.breadth != null ? `${Math.round(d.breadth * 100)}%` : '–'}</b><span class="s">cần ≥ ${Math.round(d.minBreadth * 100)}% mới mua mới</span></div>
@@ -3964,7 +3964,7 @@ $('mk-body')?.addEventListener('click', (e) => {
 });
 
 // ---------- Tool tự đầu tư (tài khoản giấy) ----------
-const AT_REASON = { hold_end: 'Hết 40 phiên, không còn là ứng viên', delisted: 'Ngừng giao dịch' };
+const AT_REASON = { hold_end: 'Hết 40 phiên, không còn là ứng viên', delisted: 'Ngừng giao dịch', stop: 'Cắt lỗ 15% so với giá vốn' };
 const vnd = (v) => (v == null ? '–' : `${Math.round(v).toLocaleString('vi-VN')} đ`);
 
 function showAutoTrade() {
@@ -4012,12 +4012,12 @@ function renderScorecard(sc) {
     : '<span class="muted">không có</span>');
   return `
     <div class="card-head"><div><h3>🏆 Bảng chấm điểm tuần ${dm(sc.week.from)} – ${dm(sc.week.to)}</h3>
-      <div class="muted small">Thước đo duy nhất không tự lừa được: tool có thắng VN-Index bằng tiền thật (giấy) không, và khuyến nghị đúng bao nhiêu.</div></div></div>
+      <div class="muted small">Thước đo duy nhất không tự lừa được: tool có thắng VN-Index và ETF VN30 (lựa chọn thay thế bỏ tiền vào được) bằng tiền thật (giấy) không, và khuyến nghị đúng bao nhiêu.</div></div></div>
     <p class="sc-verdict ${t?.cashOnly ? '' : t?.week.vs != null ? dirClass(t.week.vs) : ''}">${esc(sc.verdict)}</p>
     ${sc.model ? `<p class="small ${sc.model.status === 'weak' ? 'down' : 'muted'}" style="margin:0">${sc.model.status === 'weak' ? `🚨 <b>Mô hình suy yếu</b>: IC xếp hạng thật ${sc.model.ic.toFixed(3)} trên ${sc.model.n} phiên, kiểm định ${sc.model.backtestIC}. Cân nhắc giảm vốn theo tool cho đến khi hồi lại.` : sc.model.status === 'ok' ? `🧭 Mô hình bình thường: IC xếp hạng thật ${sc.model.ic.toFixed(3)} trên ${sc.model.n} phiên (kiểm định ${sc.model.backtestIC}).` : `🧭 Theo dõi mô hình: đang tích lũy dữ liệu (${sc.model.n}/${sc.model.need} phiên có kết quả 20 phiên).`}</p>` : ''}
     ${t ? `<div class="qc-tiles">
-      ${tile('Tool tuần này', p(t.week.ret), `VN-Index ${p(t.week.index)}`, dirClass(t.week.vs))}
-      ${tile('Từ khi bắt đầu', p(t.total.ret), `VN-Index ${p(t.total.index)} · ${t.sessions} phiên`, dirClass(t.total.vs))}
+      ${tile('Tool tuần này', p(t.week.ret), `VN-Index ${p(t.week.index)} · ETF VN30 ${p(t.week.etf)}`, dirClass(t.week.vs))}
+      ${tile('Từ khi bắt đầu', p(t.total.ret), `VN-Index ${p(t.total.index)} · ETF VN30 ${p(t.total.etf)} · ${t.sessions} phiên`, dirClass(t.total.vsEtf ?? t.total.vs))}
       ${tile('Sụt lớn nhất', p(t.maxDrawdown), 'từ đỉnh tài sản', t.maxDrawdown < -0.1 ? 'down' : '')}
       ${tile('Lệnh trong tuần', `${t.trades.buys} mua · ${t.trades.sells} bán`, t.trades.sells ? `${t.trades.wins} lệnh bán có lãi` : 'chưa có lệnh bán', '')}
     </div>` : ''}
@@ -4049,15 +4049,16 @@ function renderAutoTrade(d) {
     <button type="button" class="btn btn-ghost btn-sm" id="at-reset">Đặt lại</button>`;
   const cls = dirClass(d.pnl);
   const vsIndex = d.pnlPct != null && d.indexPct != null ? d.pnlPct - d.indexPct : null;
+  const vsEtf = d.pnlPct != null && d.etfPct != null ? d.pnlPct - d.etfPct : null;
   $('at-summary').innerHTML = `
     <div class="cap-stat-grid">
       <div class="cap-stat-item primary"><div class="cap-stat-label">Tổng tài sản (NAV)</div><div class="cap-stat-val">${vnd(d.nav)}</div><div class="cap-stat-sub">Tiền mặt ${vnd(d.cash)} · cổ phiếu ${vnd(d.stock)}${d.rules.maxExposure < 1 ? ` · giữ dự phòng ≥ ${Math.round((1 - d.rules.maxExposure) * 100)}%` : ''}</div></div>
       <div class="cap-stat-item ${cls}"><div class="cap-stat-label">Lãi / lỗ so với vốn</div><div class="cap-stat-val ${cls}">${d.pnl >= 0 ? '+' : ''}${vnd(d.pnl)}</div><div class="cap-stat-sub ${cls}">${signed(d.pnlPct)}% trên vốn ${vnd(d.funded)}</div></div>
-      <div class="cap-stat-item"><div class="cap-stat-label">So với VN-Index cùng kỳ</div><div class="cap-stat-val ${dirClass(vsIndex)}">${vsIndex != null ? `${signed(vsIndex)} điểm %` : '–'}</div><div class="cap-stat-sub">VN-Index ${d.indexPct != null ? `${signed(d.indexPct)}%` : '–'}</div></div>
+      <div class="cap-stat-item"><div class="cap-stat-label">So với ETF VN30 cùng kỳ</div><div class="cap-stat-val ${dirClass(vsEtf ?? vsIndex)}">${(vsEtf ?? vsIndex) != null ? `${signed(vsEtf ?? vsIndex)} điểm %` : '–'}</div><div class="cap-stat-sub">ETF VN30 ${d.etfPct != null ? `${signed(d.etfPct)}%` : '–'} · VN-Index ${d.indexPct != null ? `${signed(d.indexPct)}%` : '–'}</div></div>
       <div class="cap-stat-item"><div class="cap-stat-label">Đã chạy</div><div class="cap-stat-val">${d.sessions} phiên</div><div class="cap-stat-sub">Mở ${new Date(d.openedAt).toLocaleDateString('vi-VN')} · ${d.decisions} lần ra quyết định${d.lastDate ? ` · phiên gần nhất ${d.lastDate.split('-').reverse().join('/')}` : ''}</div></div>
       <div class="cap-stat-item"><div class="cap-stat-label">Lệnh đã đóng</div><div class="cap-stat-val">${d.closed.n ? `${d.closed.wins}/${d.closed.n} thắng` : 'Chưa có'}</div><div class="cap-stat-sub">Lãi đã chốt ${vnd(d.closed.pnl)} · phí ${vnd(d.fees)}</div></div>
     </div>
-    ${d.sessions < 120 ? `<p class="muted small" style="margin-top:10px">Mới chạy ${d.sessions} phiên: kết quả lúc này chủ yếu là may rủi. Cần khoảng 120–250 phiên (6–12 tháng) và so với VN-Index mới đánh giá được tool.</p>` : ''}`;
+    ${d.sessions < 120 ? `<p class="muted small" style="margin-top:10px">Mới chạy ${d.sessions} phiên: kết quả lúc này chủ yếu là may rủi. Cần khoảng 120–250 phiên (6–12 tháng) và so với ETF VN30 mới đánh giá được tool: không hơn được ETF thì mua ETF đơn giản hơn.</p>` : ''}`;
 
   const pendRows = d.pending.map((p) => `<tr>
       <td><span class="st-badge ${p.side === 'BUY' ? 'up' : 'down'}">${p.side === 'BUY' ? 'MUA' : 'BÁN'}</span></td>
